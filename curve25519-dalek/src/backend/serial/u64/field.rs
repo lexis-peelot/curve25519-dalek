@@ -576,28 +576,26 @@ impl FieldElement51 {
 
     /// Subtracts a single `FieldElement51` from each of `FieldElement51`s in place.
     pub fn batch_subtract<const N: usize>(a: &mut [Self; N], b: &Self) {
-        #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
-        {
-            Self::batch_subtract_simd(a, b);
-        }
-        #[cfg(not(all(target_feature = "avx2", not(target_feature = "avx512ifma"))))]
-        {
-            for ai in a.iter_mut() {
-                *ai -= b;
+        cfg_if! {
+            if #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))] {
+                Self::batch_subtract_simd(a, b);
+            } else {
+                for ai in a.iter_mut() {
+                    *ai -= b;
+                }
             }
         }
     }
 
     /// Adds a single `FieldElement51` to each of `FieldElement51`s in place.
     pub fn batch_add<const N: usize>(a: &mut [Self; N], b: &Self) {
-        #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
-        {
-            Self::batch_add_simd(a, b);
-        }
-        #[cfg(not(all(target_feature = "avx2", not(target_feature = "avx512ifma"))))]
-        {
-            for ai in a.iter_mut() {
-                *ai += b;
+        cfg_if! {
+            if #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))] {
+                Self::batch_add_simd(a, b);
+            } else {
+                for ai in a.iter_mut() {
+                    *ai += b;
+                }
             }
         }
     }
