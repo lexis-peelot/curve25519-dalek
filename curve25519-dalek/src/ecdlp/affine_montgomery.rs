@@ -64,6 +64,127 @@ impl AffineMontgomeryPoint {
             AffineMontgomeryPoint { u: new_u, v: new_v }
         }
     }
+
+    /// Add the same point to 4 different points simultaneously
+    pub fn batch_addition_not_ct_4way(
+        points: &[Self; 4],
+        addend: &Self,
+    ) -> [Self; 4] {
+        // Early exit checks for identity
+        if addend.is_identity_not_ct() {
+            return *points;
+        }
+        
+        // Check if any input points are identity
+        let mut results = [Self::identity(); 4];
+        let mut mask = [false; 4];
+        for i in 0..4 {
+            if points[i].is_identity_not_ct() {
+                results[i] = *addend;
+                mask[i] = true;
+            }
+        }
+        
+        // Extract u and v coordinates for batch operations
+        let u_coords = [points[0].u, points[1].u, points[2].u, points[3].u];
+        let v_coords = [points[0].v, points[1].v, points[2].v, points[3].v];
+        
+        // Check for inverse points (u1 == u2 && v1 == -v2)
+        let u_diffs = FieldElement::batch_subtract_4way(&u_coords, &addend.u);
+        let v_sums = FieldElement::batch_add_4way(&v_coords, &addend.v);
+        
+        // Compute denominators for lambda
+        let mut denominators = [FieldElement::ZERO; 4];
+        let mut is_doubling = [false; 4];
+        
+        for i in 0..4 {
+            if mask[i] {
+                continue;
+            }
+            
+            if u_diffs[i] == FieldElement::ZERO {
+                if v_sums[i] == FieldElement::ZERO {
+                    // Point at infinity case
+                    results[i] = Self::identity();
+                    mask[i] = true;
+                } else {
+                    // Doubling case
+                    is_doubling[i] = true;
+                    denominators[i] = &points[i].v + &points[i].v;
+                }
+            } else {
+                // Regular addition case
+                denominators[i] = u_diffs[i];
+            }
+        }
+        
+        // Batch invert denominators
+        let mut inv_denominators = denominators;
+        FieldElement::batch_invert_4(&mut inv_denominators);
+        
+        // Compute numerators based on doubling vs addition
+        let mut numerators = [FieldElement::ZERO; 4];
+        for i in 0..4 {
+            if mask[i] {
+                continue;
+            }
+            
+            if is_doubling[i] {
+                // (3*u1^2 + 2*A*u1 + 1)
+                let u_sq = points[i].u.square();
+                let u_sq_3 = &(&u_sq + &u_sq) + &u_sq;
+                let u_ta = &MONTGOMERY_A * &points[i].u;
+                let u_ta_2 = &u_ta + &u_ta;
+                numerators[i] = &(&u_sq_3 + &u_ta_2) + &FieldElement::ONE;
+            } else {
+                // (v1 - v2)
+                numerators[i] = &points[i].v - &addend.v;
+            }
+        }
+        
+        // Compute lambdas using batch multiplication
+        let lambdas = FieldElement::batch_mul_4way(&numerators, &inv_denominators);
+        
+        // Square lambdas
+        let lambda_squared = FieldElement::batch_square_4way(&lambdas);
+        
+        // Compute new u coordinates: lambda^2 - A - u1 - u2
+        let mut new_u_values = lambda_squared;
+        for i in 0..4 {
+            if !mask[i] {
+                new_u_values[i] = &(&new_u_values[i] - &MONTGOMERY_A) - &(&points[i].u + &addend.u);
+            }
+        }
+        
+        // Compute u1 - u3 for each point
+        let u_diffs_for_v = [
+            &points[0].u - &new_u_values[0],
+            &points[1].u - &new_u_values[1],
+            &points[2].u - &new_u_values[2],
+            &points[3].u - &new_u_values[3],
+        ];
+        
+        // Compute new v coordinates: lambda * (u1 - u3) - v1
+        let lambda_times_diff = FieldElement::batch_mul_4way(&lambdas, &u_diffs_for_v);
+        let new_v_values = [
+            &lambda_times_diff[0] - &points[0].v,
+            &lambda_times_diff[1] - &points[1].v,
+            &lambda_times_diff[2] - &points[2].v,
+            &lambda_times_diff[3] - &points[3].v,
+        ];
+        
+        // Assemble results
+        for i in 0..4 {
+            if !mask[i] {
+                results[i] = Self {
+                    u: new_u_values[i],
+                    v: new_v_values[i],
+                };
+            }
+        }
+        
+        results
+    }
 }
 
 // see test for correctness of this const

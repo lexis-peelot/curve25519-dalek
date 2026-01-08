@@ -42,7 +42,7 @@ sha2 = { version = "0.11.0-rc.0", default-features = false }
 bincode = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
 hex = "0.4.2"
-rand = "0.9"
+rand = { version = "0.9", features = ["std"] }
 rand_core = { version = "0.9", default-features = false, features = ["os_rng"] }
 
 [build-dependencies]
@@ -74,6 +74,7 @@ serde = { version = "1.0", default-features = false, optional = true, features =
 ] }
 zeroize = { version = "1", default-features = false, optional = true }
 bytemuck = { version = "1.14.0", features = ["derive"], optional = true }
+multiversion = "0.8.0"
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 cpufeatures = "0.2.17"
@@ -102,5 +103,6 @@ check-cfg = [
     'cfg(curve25519_dalek_backend, values("fiat", "serial", "simd", "unstable_avx512"))',
     'cfg(curve25519_dalek_diagnostics, values("build"))',
     'cfg(curve25519_dalek_bits, values("32", "64"))',
+    'cfg(force_ecdlp_32bit_simd_test)',
     'cfg(nightly)',
 ]
