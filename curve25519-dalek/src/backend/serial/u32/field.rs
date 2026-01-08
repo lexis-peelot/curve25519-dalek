@@ -21,6 +21,7 @@ use core::ops::Neg;
 use core::ops::{Add, AddAssign};
 use core::ops::{Mul, MulAssign};
 use core::ops::{Sub, SubAssign};
+use cfg_if::cfg_if;
 
 use subtle::Choice;
 use subtle::ConditionallySelectable;
@@ -607,26 +608,189 @@ impl FieldElement2625 {
 
     /// Subtracts a single `FieldElement2625` from each of `FieldElement2625`s in place.
     pub fn batch_subtract<const N: usize>(a: &mut [Self; N], b: &Self) {
-        for ai in a.iter_mut() {
-            *ai -= b;
+        cfg_if! {
+            if #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))] {
+                Self::batch_subtract_simd(a, b);
+            } else {
+                for ai in a.iter_mut() {
+                    *ai -= b;
+                }
+            }
+        }
+    }
+
+    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[inline]
+    fn batch_subtract_simd<const N: usize>(a: &mut [Self; N], b: &Self) {
+        use core::arch::x86_64::*;
+        
+        let mut i = 0;
+        // Process 8 elements at a time using AVX2 (since u32 limbs fit 8 per 256-bit vector)
+        while i + 7 < N {
+            unsafe {
+                for limb_idx in 0..10 {
+                    let b_splat = _mm256_set1_epi32(b.0[limb_idx] as i32);
+                    
+                    let a_vals = _mm256_set_epi32(
+                        a[i + 7].0[limb_idx] as i32,
+                        a[i + 6].0[limb_idx] as i32,
+                        a[i + 5].0[limb_idx] as i32,
+                        a[i + 4].0[limb_idx] as i32,
+                        a[i + 3].0[limb_idx] as i32,
+                        a[i + 2].0[limb_idx] as i32,
+                        a[i + 1].0[limb_idx] as i32,
+                        a[i].0[limb_idx] as i32,
+                    );
+                    
+                    // Add 16*p to avoid underflow
+                    // limbs 0,2,4,6,8 are 26-bit (bounded by 0x3ffffff), limbs 1,3,5,7,9 are 25-bit (bounded by 0x1ffffff)
+                    // limb[0] is special: 0x3ffffed
+                    let p_multiple = if limb_idx == 0 {
+                        _mm256_set1_epi32((0x3ffffed << 4) as i32)
+                    } else if limb_idx % 2 == 0 {
+                        _mm256_set1_epi32((0x3ffffff << 4) as i32)
+                    } else {
+                        _mm256_set1_epi32((0x1ffffff << 4) as i32)
+                    };
+                    
+                    let result = _mm256_sub_epi32(_mm256_add_epi32(a_vals, p_multiple), b_splat);
+                    
+                    let result_arr: [i32; 8] = core::mem::transmute(result);
+                    a[i].0[limb_idx] = result_arr[0] as u32;
+                    a[i + 1].0[limb_idx] = result_arr[1] as u32;
+                    a[i + 2].0[limb_idx] = result_arr[2] as u32;
+                    a[i + 3].0[limb_idx] = result_arr[3] as u32;
+                    a[i + 4].0[limb_idx] = result_arr[4] as u32;
+                    a[i + 5].0[limb_idx] = result_arr[5] as u32;
+                    a[i + 6].0[limb_idx] = result_arr[6] as u32;
+                    a[i + 7].0[limb_idx] = result_arr[7] as u32;
+                }
+                
+                // Reduce each result after subtraction
+                for j in 0..8 {
+                    a[i + j] = Self::reduce([
+                        a[i + j].0[0] as u64,
+                        a[i + j].0[1] as u64,
+                        a[i + j].0[2] as u64,
+                        a[i + j].0[3] as u64,
+                        a[i + j].0[4] as u64,
+                        a[i + j].0[5] as u64,
+                        a[i + j].0[6] as u64,
+                        a[i + j].0[7] as u64,
+                        a[i + j].0[8] as u64,
+                        a[i + j].0[9] as u64,
+                    ]);
+                }
+            }
+            i += 8;
+        }
+        
+        // Handle remaining elements
+        while i < N {
+            a[i] -= b;
+            i += 1;
         }
     }
 
     /// Adds a single `FieldElement2625` to each of `FieldElement2625`s in place.
     pub fn batch_add<const N: usize>(a: &mut [Self; N], b: &Self) {
-        for ai in a.iter_mut() {
-            *ai += b;
+        cfg_if! {
+            if #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))] {
+                Self::batch_add_simd(a, b);
+            } else {
+                for ai in a.iter_mut() {
+                    *ai += b;
+                }
+            }
+        }
+    }
+
+    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[inline]
+    fn batch_add_simd<const N: usize>(a: &mut [Self; N], b: &Self) {
+        use core::arch::x86_64::*;
+        
+        let mut i = 0;
+        // Process 8 elements at a time using AVX2
+        while i + 7 < N {
+            unsafe {
+                for limb_idx in 0..10 {
+                    let b_splat = _mm256_set1_epi32(b.0[limb_idx] as i32);
+                    
+                    let a_vals = _mm256_set_epi32(
+                        a[i + 7].0[limb_idx] as i32,
+                        a[i + 6].0[limb_idx] as i32,
+                        a[i + 5].0[limb_idx] as i32,
+                        a[i + 4].0[limb_idx] as i32,
+                        a[i + 3].0[limb_idx] as i32,
+                        a[i + 2].0[limb_idx] as i32,
+                        a[i + 1].0[limb_idx] as i32,
+                        a[i].0[limb_idx] as i32,
+                    );
+                    
+                    let result = _mm256_add_epi32(a_vals, b_splat);
+                    
+                    let result_arr: [i32; 8] = core::mem::transmute(result);
+                    a[i].0[limb_idx] = result_arr[0] as u32;
+                    a[i + 1].0[limb_idx] = result_arr[1] as u32;
+                    a[i + 2].0[limb_idx] = result_arr[2] as u32;
+                    a[i + 3].0[limb_idx] = result_arr[3] as u32;
+                    a[i + 4].0[limb_idx] = result_arr[4] as u32;
+                    a[i + 5].0[limb_idx] = result_arr[5] as u32;
+                    a[i + 6].0[limb_idx] = result_arr[6] as u32;
+                    a[i + 7].0[limb_idx] = result_arr[7] as u32;
+                }
+            }
+            i += 8;
+        }
+        
+        // Handle remaining elements
+        while i < N {
+            a[i] += b;
+            i += 1;
         }
     }
 
     /// Multiplies each of `FieldElement2625`s by the corresponding `FieldElement2625`s in place.
     pub fn batch_mul<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
+        cfg_if! {
+            if #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))] {
+                Self::batch_mul_simd(a, b);
+            } else {
+                for (ai, bi) in a.iter_mut().zip(b.iter()) {
+                    *ai *= bi;
+                }
+            }
+        }
+    }
+
+    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[inline]
+    fn batch_mul_simd<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
+        // For u32 backend with 10 limbs, full SIMD multiplication is complex.
+        // Use scalar multiplication for now - can be optimized later.
         for (ai, bi) in a.iter_mut().zip(b.iter()) {
             *ai *= bi;
         }
     }
 
     pub fn batch_square<const N: usize>(a: &mut [Self; N]) {
+        cfg_if! {
+            if #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))] {
+                Self::batch_square_simd(a);
+            } else {
+                for ai in a.iter_mut() {
+                    *ai = ai.square();
+                }
+            }
+        }
+    }
+
+    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[inline]
+    fn batch_square_simd<const N: usize>(a: &mut [Self; N]) {
+        // For u32 backend with 10 limbs, full SIMD squaring is complex.
+        // Use scalar squaring for now - can be optimized later.
         for ai in a.iter_mut() {
             *ai = ai.square();
         }
