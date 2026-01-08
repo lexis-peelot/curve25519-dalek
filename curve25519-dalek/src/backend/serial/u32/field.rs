@@ -604,4 +604,31 @@ impl FieldElement2625 {
         }
         FieldElement2625::reduce(coeffs)
     }
+
+    /// Subtracts a single `FieldElement2625` from each of `FieldElement2625`s in place.
+    pub fn batch_subtract<const N: usize>(a: &mut [Self; N], b: &Self) {
+        for ai in a.iter_mut() {
+            *ai -= b;
+        }
+    }
+
+    /// Adds a single `FieldElement2625` to each of `FieldElement2625`s in place.
+    pub fn batch_add<const N: usize>(a: &mut [Self; N], b: &Self) {
+        for ai in a.iter_mut() {
+            *ai += b;
+        }
+    }
+
+    /// Multiplies each of `FieldElement2625`s by the corresponding `FieldElement2625`s in place.
+    pub fn batch_mul<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
+        for (ai, bi) in a.iter_mut().zip(b.iter()) {
+            *ai *= bi;
+        }
+    }
+
+    pub fn batch_square<const N: usize>(a: &mut [Self; N]) {
+        for ai in a.iter_mut() {
+            *ai = ai.square();
+        }
+    }
 }

@@ -936,4 +936,94 @@ mod test {
             assert_eq!(fe[1], expected_fe_2);
         }
     }
+
+    #[test]
+    #[cfg(feature = "alloc")]
+    fn batch_square_matches_individual() {
+        let a = FieldElement::from_bytes(&A_BYTES);
+        let ap58 = FieldElement::from_bytes(&AP58_BYTES);
+        let asq = FieldElement::from_bytes(&ASQ_BYTES);
+        let ainv = FieldElement::from_bytes(&AINV_BYTES);
+        
+        // Test batch_square with multiple elements
+        let mut elements = [a, ap58, asq, ainv, FieldElement::ONE, FieldElement::ZERO];
+        let expected: Vec<_> = elements.iter().map(|elem| elem.square()).collect();
+        
+        FieldElement::batch_square(&mut elements);
+        
+        // Compare each batch result with individual squaring
+        for (i, elem) in elements.iter().enumerate() {
+            assert_eq!(*elem, expected[i], 
+                "batch_square mismatch at index {}", i);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "alloc")]
+    fn batch_subtract_matches_individual() {
+        let a = FieldElement::from_bytes(&A_BYTES);
+        let ap58 = FieldElement::from_bytes(&AP58_BYTES);
+        let asq = FieldElement::from_bytes(&ASQ_BYTES);
+        let ainv = FieldElement::from_bytes(&AINV_BYTES);
+        let b = FieldElement::from_bytes(&B_BYTES);
+        
+        // Test batch_subtract with multiple elements
+        let mut elements = [a, ap58, asq, ainv, FieldElement::ONE, FieldElement::ZERO];
+        let expected: Vec<_> = elements.iter().map(|elem| elem - &b).collect();
+        
+        FieldElement::batch_subtract(&mut elements, &b);
+        
+        // Compare each batch result with individual subtraction
+        for (i, elem) in elements.iter().enumerate() {
+            assert_eq!(*elem, expected[i], 
+                "batch_subtract mismatch at index {}", i);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "alloc")]
+    fn batch_mul_matches_individual() {
+        let a = FieldElement::from_bytes(&A_BYTES);
+        let ap58 = FieldElement::from_bytes(&AP58_BYTES);
+        let asq = FieldElement::from_bytes(&ASQ_BYTES);
+        let ainv = FieldElement::from_bytes(&AINV_BYTES);
+        let b = FieldElement::from_bytes(&B_BYTES);
+        
+        // Test batch_mul with multiple pairs of elements
+        let mut elements_a = [a, ap58, asq, ainv, FieldElement::ONE, FieldElement::ZERO];
+        let elements_b = [b, asq, ainv, a, ap58, asq];
+        let expected: Vec<_> = elements_a.iter().zip(elements_b.iter())
+            .map(|(ea, eb)| ea * eb)
+            .collect();
+        
+        FieldElement::batch_mul(&mut elements_a, &elements_b);
+        
+        // Compare each batch result with individual multiplication
+        for (i, elem) in elements_a.iter().enumerate() {
+            assert_eq!(*elem, expected[i], 
+                "batch_mul mismatch at index {}", i);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "alloc")]
+    fn batch_add_matches_individual() {
+        let a = FieldElement::from_bytes(&A_BYTES);
+        let ap58 = FieldElement::from_bytes(&AP58_BYTES);
+        let asq = FieldElement::from_bytes(&ASQ_BYTES);
+        let ainv = FieldElement::from_bytes(&AINV_BYTES);
+        let b = FieldElement::from_bytes(&B_BYTES);
+        
+        // Test batch_add with multiple elements
+        let mut elements = [a, ap58, asq, ainv, FieldElement::ONE, FieldElement::ZERO];
+        let expected: Vec<_> = elements.iter().map(|elem| elem + &b).collect();
+        
+        FieldElement::batch_add(&mut elements, &b);
+        
+        // Compare each batch result with individual addition
+        for (i, elem) in elements.iter().enumerate() {
+            assert_eq!(*elem, expected[i], 
+                "batch_add mismatch at index {}", i);
+        }
+    }
 }

@@ -631,6 +631,134 @@ impl<'a, 'b> Mul<&'b F51x4Reduced> for &'a F51x4Reduced {
             ])
         }
     }
+
+    /// Batch subtract: for each i, a[i] -= b
+    /// Uses AVX512IFMA intrinsics to process 4 field elements at once
+    /// Processes multiple F51x4Reduced in parallel for maximum SIMD utilization
+    #[unsafe_target_feature("avx512ifma,avx512vl")]
+    pub fn batch_subtract<const N: usize>(a: &mut [Self; N], b: &Self) {
+        const UNROLL: usize = 4;
+        let b_unreduced = F51x4Unreduced::from(*b);
+        
+        let chunks = N / UNROLL;
+        let remainder = N % UNROLL;
+        
+        // Process UNROLL F51x4Reduced at a time for better instruction-level parallelism
+        for chunk_idx in 0..chunks {
+            let base = chunk_idx * UNROLL;
+            let a0 = F51x4Unreduced::from(a[base]);
+            let a1 = F51x4Unreduced::from(a[base + 1]);
+            let a2 = F51x4Unreduced::from(a[base + 2]);
+            let a3 = F51x4Unreduced::from(a[base + 3]);
+            
+            a[base] = Self::from(a0.diff(&b_unreduced));
+            a[base + 1] = Self::from(a1.diff(&b_unreduced));
+            a[base + 2] = Self::from(a2.diff(&b_unreduced));
+            a[base + 3] = Self::from(a3.diff(&b_unreduced));
+        }
+        
+        // Handle remainder
+        let base = chunks * UNROLL;
+        for i in 0..remainder {
+            let diff = F51x4Unreduced::from(a[base + i]).diff(&b_unreduced);
+            a[base + i] = Self::from(diff);
+        }
+    }
+
+    /// Batch add: for each i, a[i] += b
+    /// Uses AVX512IFMA intrinsics to process 4 field elements at once
+    /// Processes multiple F51x4Reduced in parallel for maximum SIMD utilization
+    #[unsafe_target_feature("avx512ifma,avx512vl")]
+    pub fn batch_add<const N: usize>(a: &mut [Self; N], b: &Self) {
+        const UNROLL: usize = 4;
+        let b_unreduced = F51x4Unreduced::from(*b);
+        
+        let chunks = N / UNROLL;
+        let remainder = N % UNROLL;
+        
+        // Process UNROLL F51x4Reduced at a time for better instruction-level parallelism
+        for chunk_idx in 0..chunks {
+            let base = chunk_idx * UNROLL;
+            let a0 = F51x4Unreduced::from(a[base]);
+            let a1 = F51x4Unreduced::from(a[base + 1]);
+            let a2 = F51x4Unreduced::from(a[base + 2]);
+            let a3 = F51x4Unreduced::from(a[base + 3]);
+            
+            a[base] = Self::from(a0.sum(&b_unreduced));
+            a[base + 1] = Self::from(a1.sum(&b_unreduced));
+            a[base + 2] = Self::from(a2.sum(&b_unreduced));
+            a[base + 3] = Self::from(a3.sum(&b_unreduced));
+        }
+        
+        // Handle remainder
+        let base = chunks * UNROLL;
+        for i in 0..remainder {
+            let sum = F51x4Unreduced::from(a[base + i]).sum(&b_unreduced);
+            a[base + i] = Self::from(sum);
+        }
+    }
+
+    /// Batch multiply: for each i, a[i] *= b[i]
+    /// Uses AVX512IFMA intrinsics to process 4 field elements at once
+    /// Processes multiple F51x4Reduced in parallel for maximum SIMD utilization
+    #[unsafe_target_feature("avx512ifma,avx512vl")]
+    pub fn batch_mul<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
+        const UNROLL: usize = 4;
+        
+        let chunks = N / UNROLL;
+        let remainder = N % UNROLL;
+        
+        // Process UNROLL F51x4Reduced at a time for better instruction-level parallelism
+        for chunk_idx in 0..chunks {
+            let base = chunk_idx * UNROLL;
+            let prod0 = a[base].mul(&b[base]);
+            let prod1 = a[base + 1].mul(&b[base + 1]);
+            let prod2 = a[base + 2].mul(&b[base + 2]);
+            let prod3 = a[base + 3].mul(&b[base + 3]);
+            
+            a[base] = Self::from(prod0);
+            a[base + 1] = Self::from(prod1);
+            a[base + 2] = Self::from(prod2);
+            a[base + 3] = Self::from(prod3);
+        }
+        
+        // Handle remainder
+        let base = chunks * UNROLL;
+        for i in 0..remainder {
+            a[base + i] = Self::from(a[base + i].mul(&b[base + i]));
+        }
+    }
+
+    /// Batch square: for each i, a[i] = a[i]^2
+    /// Uses AVX512IFMA intrinsics to process 4 field elements at once
+    /// Processes multiple F51x4Reduced in parallel for maximum SIMD utilization
+    #[unsafe_target_feature("avx512ifma,avx512vl")]
+    pub fn batch_square<const N: usize>(a: &mut [Self; N]) {
+        const UNROLL: usize = 4;
+        
+        let chunks = N / UNROLL;
+        let remainder = N % UNROLL;
+        
+        // Process UNROLL F51x4Reduced at a time for better instruction-level parallelism
+        for chunk_idx in 0..chunks {
+            let base = chunk_idx * UNROLL;
+            let sq0 = a[base].square();
+            let sq1 = a[base + 1].square();
+            let sq2 = a[base + 2].square();
+            let sq3 = a[base + 3].square();
+            
+            a[base] = Self::from(sq0);
+            a[base + 1] = Self::from(sq1);
+            a[base + 2] = Self::from(sq2);
+            a[base + 3] = Self::from(sq3);
+        }
+        
+        // Handle remainder
+        let base = chunks * UNROLL;
+        for i in 0..remainder {
+            a[base + i] = Self::from(a[base + i].square());
+        }
+    }
 }
 
 #[cfg(all(target_feature = "avx512ifma", target_feature = "avx512vl"))]
@@ -842,5 +970,289 @@ mod test {
         assert_eq!(splits[1], x2);
         assert_eq!(splits[2], x2);
         assert_eq!(splits[3], x3);
+    }
+
+    #[test]
+    fn batch_subtract_matches_serial() {
+        let a = FieldElement51([2438, 24, 243, 0, 0]).invert();
+        let b = FieldElement51([98098, 87987897, 0, 1, 0]).invert();
+        
+        // Test with N=1 (remainder only)
+        let mut batch = [F51x4Unreduced::new(&a, &a, &a, &a).into()];
+        let expected = [F51x4Unreduced::new(&a, &a, &a, &a).diff(&F51x4Unreduced::new(&b, &b, &b, &b)).into()];
+        F51x4Reduced::batch_subtract(&mut batch, &F51x4Unreduced::new(&b, &b, &b, &b).into());
+        assert_eq!(batch[0].0[0], expected[0].0[0]);
+        
+        // Test with N=4 (exactly one chunk)
+        let mut batch = [
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+        ];
+        let b_vec = F51x4Unreduced::new(&b, &b, &b, &b).into();
+        F51x4Reduced::batch_subtract(&mut batch, &b_vec);
+        
+        for elem in &batch {
+            let splits = F51x4Unreduced::from(*elem).split();
+            let expected_val = &a - &b;
+            for split in &splits {
+                assert_eq!(*split, expected_val);
+            }
+        }
+        
+        // Test with N=7 (one chunk + remainder)
+        let mut batch = [
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+        ];
+        F51x4Reduced::batch_subtract(&mut batch, &b_vec);
+        
+        for elem in &batch {
+            let splits = F51x4Unreduced::from(*elem).split();
+            let expected_val = &a - &b;
+            for split in &splits {
+                assert_eq!(*split, expected_val);
+            }
+        }
+    }
+
+    #[test]
+    fn batch_add_matches_serial() {
+        let a = FieldElement51([2438, 24, 243, 0, 0]).invert();
+        let b = FieldElement51([98098, 87987897, 0, 1, 0]).invert();
+        
+        // Test with N=1 (remainder only)
+        let mut batch = [F51x4Unreduced::new(&a, &a, &a, &a).into()];
+        let b_vec = F51x4Unreduced::new(&b, &b, &b, &b).into();
+        F51x4Reduced::batch_add(&mut batch, &b_vec);
+        
+        let splits = F51x4Unreduced::from(batch[0]).split();
+        let expected_val = &a + &b;
+        for split in &splits {
+            assert_eq!(*split, expected_val);
+        }
+        
+        // Test with N=4 (exactly one chunk)
+        let mut batch = [
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+        ];
+        F51x4Reduced::batch_add(&mut batch, &b_vec);
+        
+        for elem in &batch {
+            let splits = F51x4Unreduced::from(*elem).split();
+            let expected_val = &a + &b;
+            for split in &splits {
+                assert_eq!(*split, expected_val);
+            }
+        }
+        
+        // Test with N=9 (two chunks + remainder)
+        let mut batch = [
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+        ];
+        F51x4Reduced::batch_add(&mut batch, &b_vec);
+        
+        for elem in &batch {
+            let splits = F51x4Unreduced::from(*elem).split();
+            let expected_val = &a + &b;
+            for split in &splits {
+                assert_eq!(*split, expected_val);
+            }
+        }
+    }
+
+    #[test]
+    fn batch_mul_matches_serial() {
+        let a = FieldElement51([2438, 24, 243, 0, 0]).invert();
+        let b = FieldElement51([98098, 87987897, 0, 1, 0]).invert();
+        let c = FieldElement51([12345, 67890, 11111, 22222, 33333]).invert();
+        
+        // Test with N=1 (remainder only)
+        let mut batch_a = [F51x4Unreduced::new(&a, &a, &a, &a).into()];
+        let batch_b = [F51x4Unreduced::new(&b, &b, &b, &b).into()];
+        F51x4Reduced::batch_mul(&mut batch_a, &batch_b);
+        
+        let splits = F51x4Unreduced::from(batch_a[0]).split();
+        let expected_val = &a * &b;
+        for split in &splits {
+            assert_eq!(*split, expected_val);
+        }
+        
+        // Test with N=4 (exactly one chunk)
+        let mut batch_a = [
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&b, &b, &b, &b).into(),
+            F51x4Unreduced::new(&c, &c, &c, &c).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+        ];
+        let batch_b = [
+            F51x4Unreduced::new(&b, &b, &b, &b).into(),
+            F51x4Unreduced::new(&c, &c, &c, &c).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&c, &c, &c, &c).into(),
+        ];
+        let expected_vals = [&a * &b, &b * &c, &c * &a, &a * &c];
+        
+        F51x4Reduced::batch_mul(&mut batch_a, &batch_b);
+        
+        for (idx, elem) in batch_a.iter().enumerate() {
+            let splits = F51x4Unreduced::from(*elem).split();
+            for split in &splits {
+                assert_eq!(*split, expected_vals[idx]);
+            }
+        }
+        
+        // Test with N=6 (one chunk + remainder)
+        let mut batch_a = [
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&b, &b, &b, &b).into(),
+            F51x4Unreduced::new(&c, &c, &c, &c).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&b, &b, &b, &b).into(),
+            F51x4Unreduced::new(&c, &c, &c, &c).into(),
+        ];
+        let batch_b = [
+            F51x4Unreduced::new(&c, &c, &c, &c).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&b, &b, &b, &b).into(),
+            F51x4Unreduced::new(&b, &b, &b, &b).into(),
+            F51x4Unreduced::new(&c, &c, &c, &c).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+        ];
+        let expected_vals = [&a * &c, &b * &a, &c * &b, &a * &b, &b * &c, &c * &a];
+        
+        F51x4Reduced::batch_mul(&mut batch_a, &batch_b);
+        
+        for (idx, elem) in batch_a.iter().enumerate() {
+            let splits = F51x4Unreduced::from(*elem).split();
+            for split in &splits {
+                assert_eq!(*split, expected_vals[idx]);
+            }
+        }
+    }
+
+    #[test]
+    fn batch_square_matches_serial() {
+        let a = FieldElement51([2438, 24, 243, 0, 0]).invert();
+        let b = FieldElement51([98098, 87987897, 0, 1, 0]).invert();
+        let c = FieldElement51([12345, 67890, 11111, 22222, 33333]).invert();
+        
+        // Test with N=1 (remainder only)
+        let mut batch = [F51x4Unreduced::new(&a, &a, &a, &a).into()];
+        F51x4Reduced::batch_square(&mut batch);
+        
+        let splits = F51x4Unreduced::from(batch[0]).split();
+        let expected_val = a.square();
+        for split in &splits {
+            assert_eq!(*split, expected_val);
+        }
+        
+        // Test with N=4 (exactly one chunk)
+        let mut batch = [
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&b, &b, &b, &b).into(),
+            F51x4Unreduced::new(&c, &c, &c, &c).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+        ];
+        let expected_vals = [a.square(), b.square(), c.square(), a.square()];
+        
+        F51x4Reduced::batch_square(&mut batch);
+        
+        for (idx, elem) in batch.iter().enumerate() {
+            let splits = F51x4Unreduced::from(*elem).split();
+            for split in &splits {
+                assert_eq!(*split, expected_vals[idx]);
+            }
+        }
+        
+        // Test with N=10 (two chunks + remainder)
+        let mut batch = [
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&b, &b, &b, &b).into(),
+            F51x4Unreduced::new(&c, &c, &c, &c).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&b, &b, &b, &b).into(),
+            F51x4Unreduced::new(&c, &c, &c, &c).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+            F51x4Unreduced::new(&b, &b, &b, &b).into(),
+            F51x4Unreduced::new(&c, &c, &c, &c).into(),
+            F51x4Unreduced::new(&a, &a, &a, &a).into(),
+        ];
+        let expected_vals = [
+            a.square(), b.square(), c.square(), a.square(), b.square(),
+            c.square(), a.square(), b.square(), c.square(), a.square(),
+        ];
+        
+        F51x4Reduced::batch_square(&mut batch);
+        
+        for (idx, elem) in batch.iter().enumerate() {
+            let splits = F51x4Unreduced::from(*elem).split();
+            for split in &splits {
+                assert_eq!(*split, expected_vals[idx]);
+            }
+        }
+    }
+
+    #[test]
+    fn batch_operations_large_array() {
+        // Test with a larger array to ensure chunking works correctly
+        let a = FieldElement51([2438, 24, 243, 0, 0]).invert();
+        let b = FieldElement51([98098, 87987897, 0, 1, 0]).invert();
+        
+        const SIZE: usize = 17; // 4 full chunks + 1 remainder
+        
+        // Test batch_add
+        let mut batch = [F51x4Unreduced::new(&a, &a, &a, &a).into(); SIZE];
+        let b_vec = F51x4Unreduced::new(&b, &b, &b, &b).into();
+        F51x4Reduced::batch_add(&mut batch, &b_vec);
+        
+        let expected = &a + &b;
+        for elem in &batch {
+            let splits = F51x4Unreduced::from(*elem).split();
+            for split in &splits {
+                assert_eq!(*split, expected);
+            }
+        }
+        
+        // Test batch_subtract
+        let mut batch = [F51x4Unreduced::new(&a, &a, &a, &a).into(); SIZE];
+        F51x4Reduced::batch_subtract(&mut batch, &b_vec);
+        
+        let expected = &a - &b;
+        for elem in &batch {
+            let splits = F51x4Unreduced::from(*elem).split();
+            for split in &splits {
+                assert_eq!(*split, expected);
+            }
+        }
+        
+        // Test batch_square
+        let mut batch = [F51x4Unreduced::new(&a, &a, &a, &a).into(); SIZE];
+        F51x4Reduced::batch_square(&mut batch);
+        
+        let expected = a.square();
+        for elem in &batch {
+            let splits = F51x4Unreduced::from(*elem).split();
+            for split in &splits {
+                assert_eq!(*split, expected);
+            }
+        }
     }
 }

@@ -259,4 +259,31 @@ impl FieldElement51 {
         fiat_25519_carry(&mut output.0, &output_loose);
         output
     }
+
+    /// Subtracts a single `FieldElement51` from each of `FieldElement51`s in place.
+    pub fn batch_subtract<const N: usize>(a: &mut [Self; N], b: &Self) {
+        for ai in a.iter_mut() {
+            *ai -= b;
+        }
+    }
+
+    /// Adds a single `FieldElement51` to each of `FieldElement51`s in place.
+    pub fn batch_add<const N: usize>(a: &mut [Self; N], b: &Self) {
+        for ai in a.iter_mut() {
+            *ai += b;
+        }
+    }
+
+    /// Multiplies each of `FieldElement51`s by the corresponding `FieldElement51`s in place.
+    pub fn batch_mul<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
+        for (ai, bi) in a.iter_mut().zip(b.iter()) {
+            *ai *= bi;
+        }
+    }
+
+    pub fn batch_square<const N: usize>(a: &mut [Self; N]) {
+        for ai in a.iter_mut() {
+            *ai = ai.square();
+        }
+    }
 }

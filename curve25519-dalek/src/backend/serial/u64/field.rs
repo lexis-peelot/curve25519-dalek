@@ -18,6 +18,7 @@ use core::ops::{Add, AddAssign};
 use core::ops::{Mul, MulAssign};
 use core::ops::{Sub, SubAssign};
 
+use cfg_if::cfg_if;
 use subtle::Choice;
 use subtle::ConditionallySelectable;
 
@@ -571,5 +572,601 @@ impl FieldElement51 {
         }
 
         square
+    }
+
+    /// Subtracts a single `FieldElement51` from each of `FieldElement51`s in place.
+    pub fn batch_subtract<const N: usize>(a: &mut [Self; N], b: &Self) {
+        #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+        {
+            Self::batch_subtract_simd(a, b);
+        }
+        #[cfg(not(all(target_feature = "avx2", not(target_feature = "avx512ifma"))))]
+        {
+            for ai in a.iter_mut() {
+                *ai -= b;
+            }
+        }
+    }
+
+    /// Adds a single `FieldElement51` to each of `FieldElement51`s in place.
+    pub fn batch_add<const N: usize>(a: &mut [Self; N], b: &Self) {
+        #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+        {
+            Self::batch_add_simd(a, b);
+        }
+        #[cfg(not(all(target_feature = "avx2", not(target_feature = "avx512ifma"))))]
+        {
+            for ai in a.iter_mut() {
+                *ai += b;
+            }
+        }
+    }
+
+    /// Multiplies each of `FieldElement51`s by the corresponding `FieldElement51`s in place.
+    pub fn batch_mul<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
+        cfg_if! {
+            if #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))] {
+                Self::batch_mul_simd(a, b);
+            } else {
+                for (ai, bi) in a.iter_mut().zip(b.iter()) {
+                    *ai *= bi;
+                }
+            }
+        }
+    }
+
+    pub fn batch_square<const N: usize>(a: &mut [Self; N]) {
+        cfg_if! {
+            if #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))] {
+                Self::batch_square_simd(a);
+            } else {
+                for ai in a.iter_mut() {
+                    *ai = ai.square();
+                }
+            }
+        }
+    }
+
+    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[inline]
+    fn batch_subtract_simd<const N: usize>(a: &mut [Self; N], b: &Self) {
+        use core::arch::x86_64::*;
+        
+        let mut i = 0;
+        // Process 4 elements at a time using AVX2
+        while i + 3 < N {
+            unsafe {
+                for limb_idx in 0..5 {
+                    let b_splat = _mm256_set1_epi64x(b.0[limb_idx] as i64);
+                    
+                    let a_vals = _mm256_set_epi64x(
+                        a[i + 3].0[limb_idx] as i64,
+                        a[i + 2].0[limb_idx] as i64,
+                        a[i + 1].0[limb_idx] as i64,
+                        a[i].0[limb_idx] as i64,
+                    );
+                    
+                    // Add 16*p to avoid underflow
+                    // limb[0] uses 36028797018963664, others use 36028797018963952
+                    let p_multiple = _mm256_set1_epi64x((36028797018963952u64 - (limb_idx == 0) as u64 * 288) as i64);
+                    let result = _mm256_sub_epi64(_mm256_add_epi64(a_vals, p_multiple), b_splat);
+                    
+                    let result_arr: [i64; 4] = core::mem::transmute(result);
+                    a[i].0[limb_idx] = result_arr[0] as u64;
+                    a[i + 1].0[limb_idx] = result_arr[1] as u64;
+                    a[i + 2].0[limb_idx] = result_arr[2] as u64;
+                    a[i + 3].0[limb_idx] = result_arr[3] as u64;
+                }
+                
+                // Reduce each result after subtraction
+                for j in 0..4 {
+                    a[i + j] = Self::reduce(a[i + j].0);
+                }
+            }
+            i += 4;
+        }
+        
+        // Handle remaining elements
+        while i < N {
+            a[i] -= b;
+            i += 1;
+        }
+    }
+
+    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[inline]
+    fn batch_add_simd<const N: usize>(a: &mut [Self; N], b: &Self) {
+        use core::arch::x86_64::*;
+        
+        let mut i = 0;
+        // Process 4 elements at a time using AVX2
+        while i + 3 < N {
+            unsafe {
+                for limb_idx in 0..5 {
+                    let b_splat = _mm256_set1_epi64x(b.0[limb_idx] as i64);
+                    
+                    let a_vals = _mm256_set_epi64x(
+                        a[i + 3].0[limb_idx] as i64,
+                        a[i + 2].0[limb_idx] as i64,
+                        a[i + 1].0[limb_idx] as i64,
+                        a[i].0[limb_idx] as i64,
+                    );
+                    
+                    let result = _mm256_add_epi64(a_vals, b_splat);
+                    
+                    let result_arr: [i64; 4] = core::mem::transmute(result);
+                    a[i].0[limb_idx] = result_arr[0] as u64;
+                    a[i + 1].0[limb_idx] = result_arr[1] as u64;
+                    a[i + 2].0[limb_idx] = result_arr[2] as u64;
+                    a[i + 3].0[limb_idx] = result_arr[3] as u64;
+                }
+            }
+            i += 4;
+        }
+        
+        // Handle remaining elements
+        while i < N {
+            a[i] += b;
+            i += 1;
+        }
+    }
+
+    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[inline]
+    fn batch_mul_simd<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
+        let mut i = 0;
+        // Process in groups of 4 using SIMD
+        while i + 3 < N {
+            let results = Self::batch_mul_4way_avx2(&[a[i], a[i + 1], a[i + 2], a[i + 3]], &[b[i], b[i + 1], b[i + 2], b[i + 3]]);
+            a[i] = results[0];
+            a[i + 1] = results[1];
+            a[i + 2] = results[2];
+            a[i + 3] = results[3];
+            i += 4;
+        }
+        
+        // Handle remaining elements
+        while i < N {
+            a[i] *= &b[i];
+            i += 1;
+        }
+    }
+
+    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[inline]
+    fn batch_square_simd<const N: usize>(a: &mut [Self; N]) {
+        let mut i = 0;
+        // Process in groups of 4 using SIMD
+        while i + 3 < N {
+            let results = Self::batch_square_4way_avx2(&[a[i], a[i + 1], a[i + 2], a[i + 3]]);
+            a[i] = results[0];
+            a[i + 1] = results[1];
+            a[i + 2] = results[2];
+            a[i + 3] = results[3];
+            i += 4;
+        }
+        
+        // Handle remaining elements
+        while i < N {
+            a[i] = a[i].square();
+            i += 1;
+        }
+    }
+
+    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[inline(always)]
+    fn batch_mul_4way_avx2(a: &[Self; 4], b: &[Self; 4]) -> [Self; 4] {
+        use crate::backend::vector::packed_simd::u64x4;
+        
+        // Load field elements into u64x4 vectors (one limb per lane)
+        let mut a_limbs = [u64x4::splat(0); 5];
+        let mut b_limbs = [u64x4::splat(0); 5];
+        
+        for i in 0..5 {
+            a_limbs[i] = u64x4::new(a[0].0[i], a[1].0[i], a[2].0[i], a[3].0[i]);
+            b_limbs[i] = u64x4::new(b[0].0[i], b[1].0[i], b[2].0[i], b[3].0[i]);
+        }
+        
+        // Helper: multiply two u64x4 vectors, returning (lo, hi) where result = hi << 64 | lo
+        #[inline(always)]
+        fn mul64_u64x4(x: u64x4, y: u64x4) -> (u64x4, u64x4) {
+            // Convert to arrays for element-wise multiplication
+            let x_arr: [u64; 4] = unsafe { core::mem::transmute(x) };
+            let y_arr: [u64; 4] = unsafe { core::mem::transmute(y) };
+            
+            let mut lo_arr = [0u64; 4];
+            let mut hi_arr = [0u64; 4];
+            
+            for i in 0..4 {
+                let prod = (x_arr[i] as u128) * (y_arr[i] as u128);
+                lo_arr[i] = prod as u64;
+                hi_arr[i] = (prod >> 64) as u64;
+            }
+            
+            (unsafe { core::mem::transmute(lo_arr) }, unsafe { core::mem::transmute(hi_arr) })
+        }
+        
+        // Helper: detect carry from addition (result < lhs means overflow)
+        #[inline(always)]
+        fn add_with_carry(lhs: u64x4, rhs: u64x4, carry_in: u64x4) -> (u64x4, u64x4) {
+            let result = lhs + rhs + carry_in;
+            // Detect overflow by checking if result wraps: use saturating operations
+            let lhs_arr: [u64; 4] = unsafe { core::mem::transmute(lhs) };
+            let rhs_arr: [u64; 4] = unsafe { core::mem::transmute(rhs) };
+            let carry_arr: [u64; 4] = unsafe { core::mem::transmute(carry_in) };
+            let result_arr: [u64; 4] = unsafe { core::mem::transmute(result) };
+            
+            let mut carry_out_arr = [0u64; 4];
+            for i in 0..4 {
+                let (sum1, overflow1) = lhs_arr[i].overflowing_add(rhs_arr[i]);
+                let (_, overflow2) = sum1.overflowing_add(carry_arr[i]);
+                carry_out_arr[i] = (overflow1 || overflow2) as u64;
+            }
+            
+            (result, unsafe { core::mem::transmute(carry_out_arr) })
+        }
+        
+        const LOW_51_BIT_MASK: u64 = (1u64 << 51) - 1;
+        let mask51 = u64x4::splat(LOW_51_BIT_MASK);
+        let factor_19 = u64x4::splat(19);
+        
+        // Precompute b*19 values
+        let (b1_19_lo, _b1_19_hi) = mul64_u64x4(b_limbs[1], factor_19);
+        let (b2_19_lo, _b2_19_hi) = mul64_u64x4(b_limbs[2], factor_19);
+        let (b3_19_lo, _b3_19_hi) = mul64_u64x4(b_limbs[3], factor_19);
+        let (b4_19_lo, _b4_19_hi) = mul64_u64x4(b_limbs[4], factor_19);
+        
+        // c0 = a0*b0 + a1*b4*19 + a2*b3*19 + a3*b2*19 + a4*b1*19
+        let (mut c0_lo, mut c0_hi) = mul64_u64x4(a_limbs[0], b_limbs[0]);
+        {
+            let (lo, hi) = mul64_u64x4(a_limbs[1], b4_19_lo);
+            let (new_lo, carry) = add_with_carry(c0_lo, lo, u64x4::splat(0));
+            c0_lo = new_lo;
+            c0_hi = c0_hi + hi + carry;
+            
+            let (lo, hi) = mul64_u64x4(a_limbs[2], b3_19_lo);
+            let (new_lo, carry) = add_with_carry(c0_lo, lo, u64x4::splat(0));
+            c0_lo = new_lo;
+            c0_hi = c0_hi + hi + carry;
+            
+            let (lo, hi) = mul64_u64x4(a_limbs[3], b2_19_lo);
+            let (new_lo, carry) = add_with_carry(c0_lo, lo, u64x4::splat(0));
+            c0_lo = new_lo;
+            c0_hi = c0_hi + hi + carry;
+            
+            let (lo, hi) = mul64_u64x4(a_limbs[4], b1_19_lo);
+            let (new_lo, carry) = add_with_carry(c0_lo, lo, u64x4::splat(0));
+            c0_lo = new_lo;
+            c0_hi = c0_hi + hi + carry;
+        }
+        
+        // c1 = a0*b1 + a1*b0 + a2*b4*19 + a3*b3*19 + a4*b2*19
+        let (mut c1_lo, mut c1_hi) = mul64_u64x4(a_limbs[0], b_limbs[1]);
+        {
+            let (lo, hi) = mul64_u64x4(a_limbs[1], b_limbs[0]);
+            let (new_lo, carry) = add_with_carry(c1_lo, lo, u64x4::splat(0));
+            c1_lo = new_lo;
+            c1_hi = c1_hi + hi + carry;
+            
+            let (lo, hi) = mul64_u64x4(a_limbs[2], b4_19_lo);
+            let (new_lo, carry) = add_with_carry(c1_lo, lo, u64x4::splat(0));
+            c1_lo = new_lo;
+            c1_hi = c1_hi + hi + carry;
+            
+            let (lo, hi) = mul64_u64x4(a_limbs[3], b3_19_lo);
+            let (new_lo, carry) = add_with_carry(c1_lo, lo, u64x4::splat(0));
+            c1_lo = new_lo;
+            c1_hi = c1_hi + hi + carry;
+            
+            let (lo, hi) = mul64_u64x4(a_limbs[4], b2_19_lo);
+            let (new_lo, carry) = add_with_carry(c1_lo, lo, u64x4::splat(0));
+            c1_lo = new_lo;
+            c1_hi = c1_hi + hi + carry;
+        }
+        
+        // c2 = a0*b2 + a1*b1 + a2*b0 + a3*b4*19 + a4*b3*19
+        let (mut c2_lo, mut c2_hi) = mul64_u64x4(a_limbs[0], b_limbs[2]);
+        {
+            let (lo, hi) = mul64_u64x4(a_limbs[1], b_limbs[1]);
+            let (new_lo, carry) = add_with_carry(c2_lo, lo, u64x4::splat(0));
+            c2_lo = new_lo;
+            c2_hi = c2_hi + hi + carry;
+            
+            let (lo, hi) = mul64_u64x4(a_limbs[2], b_limbs[0]);
+            let (new_lo, carry) = add_with_carry(c2_lo, lo, u64x4::splat(0));
+            c2_lo = new_lo;
+            c2_hi = c2_hi + hi + carry;
+            
+            let (lo, hi) = mul64_u64x4(a_limbs[3], b4_19_lo);
+            let (new_lo, carry) = add_with_carry(c2_lo, lo, u64x4::splat(0));
+            c2_lo = new_lo;
+            c2_hi = c2_hi + hi + carry;
+            
+            let (lo, hi) = mul64_u64x4(a_limbs[4], b3_19_lo);
+            let (new_lo, carry) = add_with_carry(c2_lo, lo, u64x4::splat(0));
+            c2_lo = new_lo;
+            c2_hi = c2_hi + hi + carry;
+        }
+        
+        // c3 = a0*b3 + a1*b2 + a2*b1 + a3*b0 + a4*b4*19
+        let (mut c3_lo, mut c3_hi) = mul64_u64x4(a_limbs[0], b_limbs[3]);
+        {
+            let (lo, hi) = mul64_u64x4(a_limbs[1], b_limbs[2]);
+            let (new_lo, carry) = add_with_carry(c3_lo, lo, u64x4::splat(0));
+            c3_lo = new_lo;
+            c3_hi = c3_hi + hi + carry;
+            
+            let (lo, hi) = mul64_u64x4(a_limbs[2], b_limbs[1]);
+            let (new_lo, carry) = add_with_carry(c3_lo, lo, u64x4::splat(0));
+            c3_lo = new_lo;
+            c3_hi = c3_hi + hi + carry;
+            
+            let (lo, hi) = mul64_u64x4(a_limbs[3], b_limbs[0]);
+            let (new_lo, carry) = add_with_carry(c3_lo, lo, u64x4::splat(0));
+            c3_lo = new_lo;
+            c3_hi = c3_hi + hi + carry;
+            
+            let (lo, hi) = mul64_u64x4(a_limbs[4], b4_19_lo);
+            let (new_lo, carry) = add_with_carry(c3_lo, lo, u64x4::splat(0));
+            c3_lo = new_lo;
+            c3_hi = c3_hi + hi + carry;
+        }
+        
+        // c4 = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
+        let (mut c4_lo, mut c4_hi) = mul64_u64x4(a_limbs[0], b_limbs[4]);
+        {
+            let (lo, hi) = mul64_u64x4(a_limbs[1], b_limbs[3]);
+            let (new_lo, carry) = add_with_carry(c4_lo, lo, u64x4::splat(0));
+            c4_lo = new_lo;
+            c4_hi = c4_hi + hi + carry;
+            
+            let (lo, hi) = mul64_u64x4(a_limbs[2], b_limbs[2]);
+            let (new_lo, carry) = add_with_carry(c4_lo, lo, u64x4::splat(0));
+            c4_lo = new_lo;
+            c4_hi = c4_hi + hi + carry;
+            
+            let (lo, hi) = mul64_u64x4(a_limbs[3], b_limbs[1]);
+            let (new_lo, carry) = add_with_carry(c4_lo, lo, u64x4::splat(0));
+            c4_lo = new_lo;
+            c4_hi = c4_hi + hi + carry;
+            
+            let (lo, hi) = mul64_u64x4(a_limbs[4], b_limbs[0]);
+            let (new_lo, carry) = add_with_carry(c4_lo, lo, u64x4::splat(0));
+            c4_lo = new_lo;
+            c4_hi = c4_hi + hi + carry;
+        }
+        
+        // Reduce and carry
+        let mut out = [u64x4::splat(0); 5];
+        
+        out[0] = c0_lo & mask51;
+        let carry0 = (c0_hi.shl::<13>()) + (c0_lo.shr::<51>());
+        
+        let (c1_updated_lo, carry_hi) = add_with_carry(c1_lo, carry0, u64x4::splat(0));
+        c1_hi = c1_hi + carry_hi;
+        out[1] = c1_updated_lo & mask51;
+        let carry1 = (c1_hi.shl::<13>()) + (c1_updated_lo.shr::<51>());
+        
+        let (c2_updated_lo, carry_hi) = add_with_carry(c2_lo, carry1, u64x4::splat(0));
+        c2_hi = c2_hi + carry_hi;
+        out[2] = c2_updated_lo & mask51;
+        let carry2 = (c2_hi.shl::<13>()) + (c2_updated_lo.shr::<51>());
+        
+        let (c3_updated_lo, carry_hi) = add_with_carry(c3_lo, carry2, u64x4::splat(0));
+        c3_hi = c3_hi + carry_hi;
+        out[3] = c3_updated_lo & mask51;
+        let carry3 = (c3_hi.shl::<13>()) + (c3_updated_lo.shr::<51>());
+        
+        let (c4_updated_lo, carry_hi) = add_with_carry(c4_lo, carry3, u64x4::splat(0));
+        c4_hi = c4_hi + carry_hi;
+        out[4] = c4_updated_lo & mask51;
+        let carry4 = (c4_hi.shl::<13>()) + (c4_updated_lo.shr::<51>());
+        
+        // out[0] += carry4 * 19
+        let (carry4_times_19_lo, _) = mul64_u64x4(carry4, factor_19);
+        let (new_out0, carry_out) = add_with_carry(out[0], carry4_times_19_lo, u64x4::splat(0));
+        out[0] = new_out0 & mask51;
+        out[1] = out[1] + (new_out0.shr::<51>()) + carry_out;
+        
+        // Extract results back to individual FieldElement51s
+        let mut results = [FieldElement51::ZERO; 4];
+        for elem_idx in 0..4 {
+            for limb_idx in 0..5 {
+                let limbs_arr: [u64; 4] = unsafe { core::mem::transmute(out[limb_idx]) };
+                results[elem_idx].0[limb_idx] = limbs_arr[elem_idx];
+            }
+        }
+        
+        results
+    }
+
+    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[inline(always)]
+    fn batch_square_4way_avx2(a: &[Self; 4]) -> [Self; 4] {
+        use crate::backend::vector::packed_simd::u64x4;
+        
+        // Load field elements into u64x4 vectors
+        let mut limbs = [u64x4::splat(0); 5];
+        for i in 0..5 {
+            limbs[i] = u64x4::new(a[0].0[i], a[1].0[i], a[2].0[i], a[3].0[i]);
+        }
+        
+        // Helper: multiply two u64x4 vectors
+        #[inline(always)]
+        fn mul64_u64x4(x: u64x4, y: u64x4) -> (u64x4, u64x4) {
+            let x_arr: [u64; 4] = unsafe { core::mem::transmute(x) };
+            let y_arr: [u64; 4] = unsafe { core::mem::transmute(y) };
+            
+            let mut lo_arr = [0u64; 4];
+            let mut hi_arr = [0u64; 4];
+            
+            for i in 0..4 {
+                let prod = (x_arr[i] as u128) * (y_arr[i] as u128);
+                lo_arr[i] = prod as u64;
+                hi_arr[i] = (prod >> 64) as u64;
+            }
+            
+            (unsafe { core::mem::transmute(lo_arr) }, unsafe { core::mem::transmute(hi_arr) })
+        }
+        
+        // Helper: detect carry from addition
+        #[inline(always)]
+        fn add_with_carry(lhs: u64x4, rhs: u64x4, carry_in: u64x4) -> (u64x4, u64x4) {
+            let result = lhs + rhs + carry_in;
+            let lhs_arr: [u64; 4] = unsafe { core::mem::transmute(lhs) };
+            let rhs_arr: [u64; 4] = unsafe { core::mem::transmute(rhs) };
+            let carry_arr: [u64; 4] = unsafe { core::mem::transmute(carry_in) };
+            let result_arr: [u64; 4] = unsafe { core::mem::transmute(result) };
+            
+            let mut carry_out_arr = [0u64; 4];
+            for i in 0..4 {
+                let (sum1, overflow1) = lhs_arr[i].overflowing_add(rhs_arr[i]);
+                let (_, overflow2) = sum1.overflowing_add(carry_arr[i]);
+                carry_out_arr[i] = (overflow1 || overflow2) as u64;
+            }
+            
+            (result, unsafe { core::mem::transmute(carry_out_arr) })
+        }
+        
+        const LOW_51_BIT_MASK: u64 = (1u64 << 51) - 1;
+        let mask51 = u64x4::splat(LOW_51_BIT_MASK);
+        let factor_19 = u64x4::splat(19);
+        
+        // Precompute a*19
+        let (a3_19_lo, _a3_19_hi) = mul64_u64x4(limbs[3], factor_19);
+        let (a4_19_lo, _a4_19_hi) = mul64_u64x4(limbs[4], factor_19);
+        
+        // c0 = a0^2 + 2*(a1*a4*19 + a2*a3*19)
+        let (mut c0_lo, mut c0_hi) = mul64_u64x4(limbs[0], limbs[0]);
+        {
+            let (lo, hi) = mul64_u64x4(limbs[1], a4_19_lo);
+            let lo2 = lo.shl::<1>();
+            let hi2 = (hi.shl::<1>()) + (lo.shr::<63>());
+            let (new_lo, carry) = add_with_carry(c0_lo, lo2, u64x4::splat(0));
+            c0_lo = new_lo;
+            c0_hi = c0_hi + hi2 + carry;
+            
+            let (lo, hi) = mul64_u64x4(limbs[2], a3_19_lo);
+            let lo2 = lo.shl::<1>();
+            let hi2 = (hi.shl::<1>()) + (lo.shr::<63>());
+            let (new_lo, carry) = add_with_carry(c0_lo, lo2, u64x4::splat(0));
+            c0_lo = new_lo;
+            c0_hi = c0_hi + hi2 + carry;
+        }
+        
+        // c1 = a3*a3_19 + 2*(a0*a1 + a2*a4*19)
+        let (mut c1_lo, mut c1_hi) = mul64_u64x4(limbs[3], a3_19_lo);
+        {
+            let (lo, hi) = mul64_u64x4(limbs[0], limbs[1]);
+            let lo2 = lo.shl::<1>();
+            let hi2 = (hi.shl::<1>()) + (lo.shr::<63>());
+            let (new_lo, carry) = add_with_carry(c1_lo, lo2, u64x4::splat(0));
+            c1_lo = new_lo;
+            c1_hi = c1_hi + hi2 + carry;
+            
+            let (lo, hi) = mul64_u64x4(limbs[2], a4_19_lo);
+            let lo2 = lo.shl::<1>();
+            let hi2 = (hi.shl::<1>()) + (lo.shr::<63>());
+            let (new_lo, carry) = add_with_carry(c1_lo, lo2, u64x4::splat(0));
+            c1_lo = new_lo;
+            c1_hi = c1_hi + hi2 + carry;
+        }
+        
+        // c2 = a1^2 + 2*(a0*a2 + a4*a3*19)
+        let (mut c2_lo, mut c2_hi) = mul64_u64x4(limbs[1], limbs[1]);
+        {
+            let (lo, hi) = mul64_u64x4(limbs[0], limbs[2]);
+            let lo2 = lo.shl::<1>();
+            let hi2 = (hi.shl::<1>()) + (lo.shr::<63>());
+            let (new_lo, carry) = add_with_carry(c2_lo, lo2, u64x4::splat(0));
+            c2_lo = new_lo;
+            c2_hi = c2_hi + hi2 + carry;
+            
+            let (lo, hi) = mul64_u64x4(limbs[4], a3_19_lo);
+            let lo2 = lo.shl::<1>();
+            let hi2 = (hi.shl::<1>()) + (lo.shr::<63>());
+            let (new_lo, carry) = add_with_carry(c2_lo, lo2, u64x4::splat(0));
+            c2_lo = new_lo;
+            c2_hi = c2_hi + hi2 + carry;
+        }
+        
+        // c3 = a4*a4_19 + 2*(a0*a3 + a1*a2)
+        let (mut c3_lo, mut c3_hi) = mul64_u64x4(limbs[4], a4_19_lo);
+        {
+            let (lo, hi) = mul64_u64x4(limbs[0], limbs[3]);
+            let lo2 = lo.shl::<1>();
+            let hi2 = (hi.shl::<1>()) + (lo.shr::<63>());
+            let (new_lo, carry) = add_with_carry(c3_lo, lo2, u64x4::splat(0));
+            c3_lo = new_lo;
+            c3_hi = c3_hi + hi2 + carry;
+            
+            let (lo, hi) = mul64_u64x4(limbs[1], limbs[2]);
+            let lo2 = lo.shl::<1>();
+            let hi2 = (hi.shl::<1>()) + (lo.shr::<63>());
+            let (new_lo, carry) = add_with_carry(c3_lo, lo2, u64x4::splat(0));
+            c3_lo = new_lo;
+            c3_hi = c3_hi + hi2 + carry;
+        }
+        
+        // c4 = a2^2 + 2*(a0*a4 + a1*a3)
+        let (mut c4_lo, mut c4_hi) = mul64_u64x4(limbs[2], limbs[2]);
+        {
+            let (lo, hi) = mul64_u64x4(limbs[0], limbs[4]);
+            let lo2 = lo.shl::<1>();
+            let hi2 = (hi.shl::<1>()) + (lo.shr::<63>());
+            let (new_lo, carry) = add_with_carry(c4_lo, lo2, u64x4::splat(0));
+            c4_lo = new_lo;
+            c4_hi = c4_hi + hi2 + carry;
+            
+            let (lo, hi) = mul64_u64x4(limbs[1], limbs[3]);
+            let lo2 = lo.shl::<1>();
+            let hi2 = (hi.shl::<1>()) + (lo.shr::<63>());
+            let (new_lo, carry) = add_with_carry(c4_lo, lo2, u64x4::splat(0));
+            c4_lo = new_lo;
+            c4_hi = c4_hi + hi2 + carry;
+        }
+        
+        // Reduce and carry
+        let mut out = [u64x4::splat(0); 5];
+        
+        out[0] = c0_lo & mask51;
+        let carry0 = (c0_hi.shl::<13>()) + (c0_lo.shr::<51>());
+        
+        let (c1_updated_lo, carry_hi) = add_with_carry(c1_lo, carry0, u64x4::splat(0));
+        c1_hi = c1_hi + carry_hi;
+        out[1] = c1_updated_lo & mask51;
+        let carry1 = (c1_hi.shl::<13>()) + (c1_updated_lo.shr::<51>());
+        
+        let (c2_updated_lo, carry_hi) = add_with_carry(c2_lo, carry1, u64x4::splat(0));
+        c2_hi = c2_hi + carry_hi;
+        out[2] = c2_updated_lo & mask51;
+        let carry2 = (c2_hi.shl::<13>()) + (c2_updated_lo.shr::<51>());
+        
+        let (c3_updated_lo, carry_hi) = add_with_carry(c3_lo, carry2, u64x4::splat(0));
+        c3_hi = c3_hi + carry_hi;
+        out[3] = c3_updated_lo & mask51;
+        let carry3 = (c3_hi.shl::<13>()) + (c3_updated_lo.shr::<51>());
+        
+        let (c4_updated_lo, carry_hi) = add_with_carry(c4_lo, carry3, u64x4::splat(0));
+        c4_hi = c4_hi + carry_hi;
+        out[4] = c4_updated_lo & mask51;
+        let carry4 = (c4_hi.shl::<13>()) + (c4_updated_lo.shr::<51>());
+        
+        // out[0] += carry4 * 19
+        let (carry4_times_19_lo, _) = mul64_u64x4(carry4, factor_19);
+        let (new_out0, carry_out) = add_with_carry(out[0], carry4_times_19_lo, u64x4::splat(0));
+        out[0] = new_out0 & mask51;
+        out[1] = out[1] + (new_out0.shr::<51>()) + carry_out;
+        
+        // Extract results back to individual FieldElement51s
+        let mut results = [FieldElement51::ZERO; 4];
+        for elem_idx in 0..4 {
+            for limb_idx in 0..5 {
+                let limbs_arr: [u64; 4] = unsafe { core::mem::transmute(out[limb_idx]) };
+                results[elem_idx].0[limb_idx] = limbs_arr[elem_idx];
+            }
+        }
+        
+        results
     }
 }
