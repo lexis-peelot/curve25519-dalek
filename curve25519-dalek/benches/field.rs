@@ -39,8 +39,8 @@ bench_op!(bench_batch_add, "batch_add", |arr| {
 });
 
 bench_op!(bench_batch_mul, "batch_mul", |arr| {
-    let arr_b = [B, B, B, B];
-    FieldElement::batch_mul(black_box(&mut arr), black_box(&arr_b));
+    let b = [B; 4];
+    FieldElement::batch_mul(black_box(&mut arr), black_box(&b));
 });
 
 bench_op!(bench_batch_square, "batch_square", |arr| {

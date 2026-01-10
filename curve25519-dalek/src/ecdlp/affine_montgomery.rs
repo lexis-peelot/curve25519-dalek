@@ -31,6 +31,47 @@ impl AffineMontgomeryPoint {
         }
     }
 
+    /// Convert a batch of `EdwardsPoint`s to `AffineMontgomeryPoint`s.
+    pub fn from_points<const N: usize>(points: [&EdwardsPoint; N]) -> [Self; N] {
+        // u = (1+y)/(1-y) = (Z+Y)/(Z-Y),
+        // v = (1+y)/(x(1-y)) * alpha = (Z+Y)/(X-T) * alpha.
+        let mut t = [FieldElement::ZERO; N];
+        let mut x_minus_t = [FieldElement::ZERO; N];
+        let mut y = [FieldElement::ZERO; N];
+        let mut z_minus_y = [FieldElement::ZERO; N];
+        let mut z_plus_y = [FieldElement::ZERO; N];
+
+        for (i, point) in points.iter().enumerate() {
+            t[i] = point.T;
+            y[i] = point.Y;
+
+            x_minus_t[i] = point.X;
+            z_minus_y[i] = point.Z;
+            z_plus_y[i] = point.Z;
+        }
+
+        FieldElement::batch_add_n(&mut z_plus_y, &y);
+        FieldElement::batch_subtract_n(&mut z_minus_y, &y);
+        FieldElement::batch_subtract_n(&mut x_minus_t, &t);
+
+        FieldElement::invert_batch(&mut z_minus_y);
+        FieldElement::invert_batch(&mut x_minus_t);
+
+        let mut u_coords = z_plus_y;
+        FieldElement::batch_mul(&mut u_coords, &z_minus_y);
+
+        let mut v_coords = z_plus_y;
+        FieldElement::batch_mul(&mut v_coords, &x_minus_t);
+        FieldElement::batch_mul(&mut v_coords, &[ALPHA; N]);
+
+        let mut result = [Self::identity(); N];
+        for (i, (u, v)) in u_coords.into_iter().zip(v_coords.into_iter()).enumerate() {
+            result[i] = Self { u, v };
+        }
+
+        result
+    }
+
     /// Add two `AffineMontgomeryPoint` together.
     pub fn addition_not_ct(&self, p2: &Self) -> AffineMontgomeryPoint {
         let p1 = self;
@@ -205,9 +246,13 @@ impl From<&'_ EdwardsPoint> for AffineMontgomeryPoint {
         let Z_plus_Y = &eddy.Z + &eddy.Y;
         let Z_minus_Y = &eddy.Z - &eddy.Y;
         let X_minus_T = &eddy.X - &eddy.T;
-        AffineMontgomeryPoint {
-            u: &Z_plus_Y * &Z_minus_Y.invert(),
-            v: &(&Z_plus_Y * &X_minus_T.invert()) * &ALPHA,
+
+        let mut tmp = [Z_minus_Y, X_minus_T];
+        FieldElement::invert_batch(&mut tmp);
+
+        Self {
+            u: &Z_plus_Y * &tmp[0],
+            v: &(&Z_plus_Y * &tmp[1]) * &ALPHA,
         }
     }
 }
@@ -297,5 +342,32 @@ mod tests {
 
         assert_eq!(batch_results2[0].u.to_bytes(), addend.u.to_bytes());
         assert_eq!(batch_results2[0].v.to_bytes(), addend.v.to_bytes());
+    }
+
+    #[test]
+    fn test_from_points() {
+        let ed_p1 = EdwardsPoint::mul_base(&Scalar::from(2u64));
+        let ed_p2 = EdwardsPoint::mul_base(&Scalar::from(3u64));
+        let ed_p3 = EdwardsPoint::mul_base(&Scalar::from(5u64));
+        let ed_p4 = EdwardsPoint::mul_base(&Scalar::from(7u64));
+
+        let points = [&ed_p1, &ed_p2, &ed_p3, &ed_p4];
+        let affine_points = AffineMontgomeryPoint::from_points(points);
+
+        for (i, ed_point) in points.iter().enumerate() {
+            let expected = AffineMontgomeryPoint::from(*ed_point);
+            assert_eq!(
+                affine_points[i].u.to_bytes(),
+                expected.u.to_bytes(),
+                "from_points u mismatch at index {}",
+                i
+            );
+            assert_eq!(
+                affine_points[i].v.to_bytes(),
+                expected.v.to_bytes(),
+                "from_points v mismatch at index {}",
+                i
+            );
+        }
     }
 }

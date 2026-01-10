@@ -268,9 +268,13 @@ fn make_point_iterator(
     let normalized = RistrettoPoint(normalized.0.mul_by_cofactor());
     let els_per_batch = 1u64 << (L2 + precomputed_tables.get_l1());
 
-    let target_montgomery = AffineMontgomeryPoint::from(&normalized.0);
     let batch_step = -(els_per_batch as i64);
-    let batch_step_montgomery = AffineMontgomeryPoint::from(&(i64_to_scalar(batch_step) * G).0.mul_by_cofactor());
+    let [target_montgomery, batch_step_montgomery] = AffineMontgomeryPoint::from_points(
+        [
+            &normalized.0,
+            &(i64_to_scalar(batch_step) * G).0.mul_by_cofactor()
+        ]
+    );
 
     struct BatchedIterator {
         current_batch: [AffineMontgomeryPoint; 4],
@@ -478,7 +482,21 @@ fn fast_ecdlp(
         }
     };
 
-    let mut batch = [FieldElement::ZERO; BATCH_SIZE];
+    // Precompute origins for batching
+    let mut alphas_origin = [FieldElement::ZERO; BATCH_SIZE];
+    let mut batch_origin = [FieldElement::ZERO; BATCH_SIZE];
+    let mut lambdas_origin = [FieldElement::ZERO; BATCH_SIZE];
+    let mut lambdas_neg_origin = [FieldElement::ZERO; BATCH_SIZE];
+
+    for i in 0..BATCH_SIZE {
+        alphas_origin[i] = t2_cache_alpha[i];
+
+        let t2_point = &t2_cache[i];
+        batch_origin[i] = t2_point.u;
+        lambdas_origin[i] = t2_point.v;
+        lambdas_neg_origin[i] = -&t2_point.v;
+    }
+
     'outer: for (index, j_start, target_montgomery, progress) in point_iterator {
         // amortize the potential cost of the report function
         if index % BATCH_SIZE == 0 {
@@ -508,12 +526,12 @@ fn fast_ecdlp(
             break 'outer;
         }
 
-        let mut changes = std::array::from_fn(|i| t2_cache[i].u);
-        FieldElement::batch_subtract::<BATCH_SIZE>(&mut changes, &target_montgomery.u);
+        let mut batch = batch_origin;
+        FieldElement::batch_subtract::<BATCH_SIZE>(&mut batch, &target_montgomery.u);
 
         // Z = T2[j]_x - Pm_x
-        for (i, (batch, diff)) in batch.iter_mut().zip(changes.into_iter()).enumerate() {
-            if diff.is_zero_not_ct() {
+        for (i, batch) in batch.iter().enumerate() {
+            if batch.is_zero_not_ct() {
                 let j = i + 1;
                 // Case 1: (Montgomery addition) exceptional case when T2[j] = Pm.
                 // m1 = j * 2^L1, m2 = -j * 2^L1
@@ -526,19 +544,17 @@ fn fast_ecdlp(
                     break 'outer;
                 }
             }
-
-            *batch = diff;
         }
 
         // nu = Z^-1
         FieldElement::invert_batch(&mut batch);
 
-        let mut alphas = std::array::from_fn(|i| t2_cache_alpha[i]);
+        let mut alphas = alphas_origin;
         FieldElement::batch_subtract::<BATCH_SIZE>(&mut alphas, &target_montgomery.u);
 
         // lambda = (T2[j]_y - Pm_y) * nu
         // Q_x = lambda^2 - A - T2[j]_x - Pm_x
-        let mut lambdas = std::array::from_fn(|i| t2_cache[i].v);
+        let mut lambdas = lambdas_origin;
         FieldElement::batch_subtract::<BATCH_SIZE>(&mut lambdas, &target_montgomery.v);
         FieldElement::batch_mul(&mut lambdas, &batch);
         FieldElement::batch_square(&mut lambdas);
@@ -565,7 +581,7 @@ fn fast_ecdlp(
         // Recompute nu for the positive j case
         // lambda = (T2[j]_y - Pm_y) * nu
         // Q_x = lambda^2 - A - T2[j]_x - Pm_x
-        let mut lambdas = std::array::from_fn(|i| -&t2_cache[i].v);
+        let mut lambdas = lambdas_neg_origin;
         FieldElement::batch_subtract::<BATCH_SIZE>(&mut lambdas, &target_montgomery.v);
         FieldElement::batch_mul(&mut lambdas, &batch);
         FieldElement::batch_square(&mut lambdas);
@@ -663,7 +679,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ecdlp() {
+    fn test_ecdlp_decode() {
         let tables = read_or_gen_tables();
         let view = tables.view();
 
