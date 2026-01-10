@@ -1,5 +1,4 @@
 use crate::{EdwardsPoint, constants::MONTGOMERY_A, field::FieldElement};
-use std::array;
 
 /// An affine point on a Montgomery curve in (u, v) coordinates.
 #[derive(Clone, Copy, Debug)]
@@ -121,45 +120,63 @@ impl AffineMontgomeryPoint {
 
         // Check if any input points are identity
         let mut results = [Self::identity(); N];
-        let mut mask = [false; N];
-        for i in 0..N {
-            if points[i].is_identity_not_ct() {
-                results[i] = *addend;
-                mask[i] = true;
-            }
-        }
+        let mut masks = [false; N];
 
         // Extract u and v coordinates for batch operations
-        let mut u_coords: [FieldElement; N] = array::from_fn(|i| points[i].u);
-        FieldElement::batch_subtract(&mut u_coords, &addend.u);
+        let mut u_coords_origin = [FieldElement::ZERO; N];
+        let mut v_coords_origin = [FieldElement::ZERO; N];
 
-        let mut v_coords: [FieldElement; N] = array::from_fn(|i| points[i].v);
+        for (i, point) in points.iter().enumerate() {
+            u_coords_origin[i] = point.u;
+            v_coords_origin[i] = point.v;
+        }
 
         // Check for inverse points (u1 == u2 && v1 == -v2)
+        let mut u_coords = u_coords_origin;
+        FieldElement::batch_subtract(&mut u_coords, &addend.u);
+
+        let mut v_coords = v_coords_origin;
         FieldElement::batch_add(&mut v_coords, &addend.v);
 
         // Compute denominators for lambda
         let mut denominators = [FieldElement::ZERO; N];
-        let mut is_doubling = [false; N];
+        let mut numerators = [FieldElement::ZERO; N];
 
         for ((i, u_coord), v_coord) in u_coords.iter().enumerate().zip(v_coords.iter()) {
-            if mask[i] {
+            let point = &points[i];
+            if point.is_identity_not_ct() {
+                masks[i] = true;
+                results[i] = *addend;
                 continue;
             }
 
             if *u_coord == FieldElement::ZERO {
                 if *v_coord == FieldElement::ZERO {
                     // Point at infinity case
-                    results[i] = Self::identity();
-                    mask[i] = true;
+                    masks[i] = true;
                 } else {
                     // Doubling case
-                    is_doubling[i] = true;
+                    // (3*u1^2 + 2*A*u1 + 1)
                     let point = &points[i];
+                    let u_ta = &MONTGOMERY_A * &point.u;
+
+                    let u_sq = point.u.square();
+
+                    // last item is dummy, just in case we support SIMD
+                    let mut tmp = [u_sq, u_ta, point.v, FieldElement::ZERO];
+                    FieldElement::batch_add_n(&mut tmp, &[u_sq, u_ta, point.v, FieldElement::ZERO]);
+
+                    let [u_sq_2, u_ta_2, point_v_2, _] = tmp;
+                    let u_sq_3 = &u_sq_2 + &u_sq;
+
+                    numerators[i] = &(&u_sq_3 + &u_ta_2) + &FieldElement::ONE;
+
                     // Denominator is 2*v1
-                    denominators[i] = &point.v + &point.v;
+                    denominators[i] = point_v_2;
                 }
             } else {
+                // (v1 - v2)
+                numerators[i] = &points[i].v - &addend.v;
                 // Regular addition case
                 denominators[i] = *u_coord;
             }
@@ -169,26 +186,6 @@ impl AffineMontgomeryPoint {
         let mut inv_denominators = denominators;
         FieldElement::invert_batch(&mut inv_denominators);
 
-        // Compute numerators based on doubling vs addition
-        let mut numerators = [FieldElement::ZERO; N];
-        for i in 0..N {
-            if mask[i] {
-                continue;
-            }
-
-            if is_doubling[i] {
-                // (3*u1^2 + 2*A*u1 + 1)
-                let u_sq = points[i].u.square();
-                let u_sq_3 = &(&u_sq + &u_sq) + &u_sq;
-                let u_ta = &MONTGOMERY_A * &points[i].u;
-                let u_ta_2 = &u_ta + &u_ta;
-                numerators[i] = &(&u_sq_3 + &u_ta_2) + &FieldElement::ONE;
-            } else {
-                // (v1 - v2)
-                numerators[i] = &points[i].v - &addend.v;
-            }
-        }
-
         // Compute lambdas using batch multiplication
         FieldElement::batch_mul(&mut numerators, &inv_denominators);
 
@@ -197,31 +194,34 @@ impl AffineMontgomeryPoint {
         // Square lambdas
         FieldElement::batch_square(&mut numerators);
 
-        // Compute new u coordinates: lambda^2 - A - u1 - u2
-        for ((u, mask_val), point) in numerators.iter_mut().zip(mask.iter()).zip(points.iter()) {
-            if !*mask_val {
-                *u = &(&*u - &MONTGOMERY_A) - &(&point.u + &addend.u);
-            }
-        }
+        // Compute lambda^2 - A
+        FieldElement::batch_subtract(&mut numerators, &MONTGOMERY_A);
+
+        let mut u_coords_plus_addend = u_coords_origin;
+        FieldElement::batch_add(&mut u_coords_plus_addend, &addend.u);
+        FieldElement::batch_subtract_n(&mut numerators, &u_coords_plus_addend);
 
         // Compute u1 - u3 for each point
-        let u_diffs_for_v = array::from_fn(|i| &points[i].u - &numerators[i]);
+        let mut u_diffs_for_v = u_coords_origin;
+        FieldElement::batch_subtract_n(&mut u_diffs_for_v, &numerators);
 
         // Compute new v coordinates: lambda * (u1 - u3) - v1
         FieldElement::batch_mul(&mut lambdas, &u_diffs_for_v);
 
+        // Compute then subtract v1
+        FieldElement::batch_subtract_n(&mut lambdas, &v_coords_origin);
+
         // Assemble results
-        for (i, (((u, v), point), mask_val)) in numerators
+        for (i, ((u, v), is_masked)) in numerators
             .into_iter()
             .zip(lambdas)
-            .zip(points.iter())
-            .zip(mask.iter())
+            .zip(masks)
             .enumerate()
         {
-            if !*mask_val {
+            if !is_masked {
                 results[i] = Self {
                     u,
-                    v: &v - &point.v,
+                    v,
                 };
             }
         }
@@ -259,6 +259,8 @@ impl From<&'_ EdwardsPoint> for AffineMontgomeryPoint {
 
 #[cfg(test)]
 mod tests {
+    use rand::{Rng, rng};
+
     use super::*;
     use crate::Scalar;
 
@@ -349,7 +351,7 @@ mod tests {
         let ed_p1 = EdwardsPoint::mul_base(&Scalar::from(2u64));
         let ed_p2 = EdwardsPoint::mul_base(&Scalar::from(3u64));
         let ed_p3 = EdwardsPoint::mul_base(&Scalar::from(5u64));
-        let ed_p4 = EdwardsPoint::mul_base(&Scalar::from(7u64));
+        let ed_p4 = EdwardsPoint::mul_base(&Scalar::from(rng().random::<u64>()));
 
         let points = [&ed_p1, &ed_p2, &ed_p3, &ed_p4];
         let affine_points = AffineMontgomeryPoint::from_points(points);
