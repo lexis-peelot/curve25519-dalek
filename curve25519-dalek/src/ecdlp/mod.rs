@@ -92,7 +92,9 @@ mod scheduler;
 mod table;
 
 use crate::{
-    RistrettoPoint, Scalar, constants::MONTGOMERY_A_NEG, constants::RISTRETTO_BASEPOINT_POINT as G,
+    RistrettoPoint, Scalar,
+    constants::MONTGOMERY_A_NEG,
+    constants::RISTRETTO_BASEPOINT_POINT as G,
     field::FieldElement,
 };
 use core::{
@@ -347,21 +349,7 @@ pub fn decode<R: ProgressReportFunction>(
     let (offset, normalized, num_batches) = decode_prep(precomputed_tables, point, &args, 1, 0);
     let point_iter = make_point_iterator(precomputed_tables, normalized, num_batches);
 
-    // Pre compute the T2 cache
-    let mut t2_cache = [AffineMontgomeryPoint::identity(); BATCH_SIZE];
-    let mut t2_cache_alpha = [FieldElement::ZERO; BATCH_SIZE];
-    {
-        let t2_table = precomputed_tables.get_t2();
-        for (i, (cache, alpha)) in t2_cache
-            .iter_mut()
-            .zip(t2_cache_alpha.iter_mut())
-            .enumerate()
-        {
-            let point = t2_table.index(i);
-            *alpha = &MONTGOMERY_A_NEG - &point.u;
-            *cache = point;
-        }
-    }
+    let (t2_cache, t2_cache_alpha) = prepare_t2_cache(precomputed_tables);
 
     fast_ecdlp(
         precomputed_tables,
@@ -373,6 +361,33 @@ pub fn decode<R: ProgressReportFunction>(
         &t2_cache_alpha,
     )
     .map(|v| v as i64 + offset)
+}
+
+/// Prepares the T2 cache for fast ECDLP.
+#[inline]
+fn prepare_t2_cache(precomputed_tables: &ECDLPTablesFileView<'_>) -> ([AffineMontgomeryPoint; BATCH_SIZE], [FieldElement; BATCH_SIZE]) {
+    // Pre compute the T2 cache
+    let mut t2_cache = [AffineMontgomeryPoint::identity(); BATCH_SIZE];
+    let mut t2_cache_alpha = [MONTGOMERY_A_NEG; BATCH_SIZE];
+    {
+        let t2_table = precomputed_tables.get_t2();
+        let mut points_u = [FieldElement::ZERO; BATCH_SIZE];
+
+        for (i, (cache, u)) in t2_cache
+            .iter_mut()
+            .zip(points_u.iter_mut())
+            .enumerate()
+        {
+            let point = t2_table.index(i);
+            *u = point.u;
+            *cache = point;
+        }
+
+        // Compute alphas = A - T2[j]_x
+        FieldElement::batch_subtract_n(&mut t2_cache_alpha, &points_u);
+    }
+
+    (t2_cache, t2_cache_alpha)
 }
 
 /// Decode a [`RistrettoPoint`] to the represented integer, in parallel.
@@ -392,20 +407,7 @@ where
     let end_flag = AtomicBool::new(false);
 
     // Pre compute the T2 cache
-    let mut t2_cache = [AffineMontgomeryPoint::identity(); BATCH_SIZE];
-    let mut t2_cache_alpha = [FieldElement::ZERO; BATCH_SIZE];
-    {
-        let t2_table = precomputed_tables.get_t2();
-        for (i, (cache, alpha)) in t2_cache
-            .iter_mut()
-            .zip(t2_cache_alpha.iter_mut())
-            .enumerate()
-        {
-            let point = t2_table.index(i);
-            *alpha = &MONTGOMERY_A_NEG - &point.u;
-            *cache = point;
-        }
-    }
+    let (t2_cache, t2_cache_alpha) = prepare_t2_cache(precomputed_tables);
 
     S::scope(|s| {
         let handles = (0..args.n_threads)
