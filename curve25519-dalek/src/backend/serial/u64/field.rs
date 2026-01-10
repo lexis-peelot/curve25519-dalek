@@ -28,6 +28,10 @@ use zeroize::Zeroize;
 #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
 use crate::backend::vector::avx2::field::FieldElement2625x4;
 
+#[cfg(all(target_feature = "avx512ifma"))]
+use crate::backend::vector::ifma::field::{F51x4Reduced, F51x4Unreduced};
+
+
 /// A `FieldElement51` represents an element of the field
 /// \\( \mathbb Z / (2\^{255} - 19)\\).
 ///
@@ -578,7 +582,7 @@ impl FieldElement51 {
     }
 
     /// Subtracts a single `FieldElement51` from each of `FieldElement51`s in place.
-    #[inline(always)]
+    #[inline]
     pub fn batch_subtract<const N: usize>(a: &mut [Self; N], b: &Self) {
         cfg_if! {
             if #[cfg(target_feature = "avx512ifma")] {
@@ -594,7 +598,7 @@ impl FieldElement51 {
     }
 
     /// Subtracts a single `FieldElement51` from each of `FieldElement51`s in place.
-    #[inline(always)]
+    #[inline]
     pub fn batch_subtract_n<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
         cfg_if! {
             if #[cfg(target_feature = "avx512ifma")] {
@@ -610,7 +614,7 @@ impl FieldElement51 {
     }
 
     /// Adds a single `FieldElement51` to each of `FieldElement51`s in place.
-    #[inline(always)]
+    #[inline]
     pub fn batch_add<const N: usize>(a: &mut [Self; N], b: &Self) {
         cfg_if! {
             if #[cfg(target_feature = "avx512ifma")] {
@@ -626,7 +630,7 @@ impl FieldElement51 {
     }
 
     /// Adds a single `FieldElement51` to each of `FieldElement51`s in place.
-    #[inline(always)]
+    #[inline]
     pub fn batch_add_n<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
         cfg_if! {
             if #[cfg(target_feature = "avx512ifma")] {
@@ -642,7 +646,7 @@ impl FieldElement51 {
     }
 
     /// Multiplies each of `FieldElement51`s by the corresponding `FieldElement51`s in place.
-    #[inline(always)]
+    #[inline]
     pub fn batch_mul<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
         cfg_if! {
             if #[cfg(target_feature = "avx512ifma")] {
@@ -657,7 +661,7 @@ impl FieldElement51 {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn batch_square<const N: usize>(a: &mut [Self; N]) {
         cfg_if! {
             if #[cfg(target_feature = "avx512ifma")] {
@@ -669,6 +673,62 @@ impl FieldElement51 {
                     *ai = ai.square();
                 }
             }
+        }
+    }
+
+    /// Multiplies each of `FieldElement51`s by the corresponding `FieldElement51`s and squares the result in place.
+    #[inline]
+    pub fn batch_sub_mul_square_add<const N: usize>(values: &mut [Self; N], sub: &Self, mul: &[Self; N], add: &[Self; N]) {
+        cfg_if! {
+            if #[cfg(target_feature = "avx512ifma")] {
+                Self::batch_sub_mul_square_add_avx512(values, sub, mul, add);
+            } else if #[cfg(target_feature = "avx2")] {
+                Self::batch_sub_mul_square_add_avx2(values, sub, mul, add);
+            } else {
+                for ((ai, bi), ci) in values.iter_mut().zip(mul.iter()).zip(add.iter()) {
+                    *ai = &(&(*ai - sub) * bi).square() + ci;
+                }
+            }
+        }
+    }
+
+    /// Negates each of `FieldElement51`s in place.
+    #[inline]
+    pub fn batch_negate<const N: usize>(a: &mut [Self; N]) {
+        cfg_if! {
+            if #[cfg(target_feature = "avx512ifma")] {
+                Self::batch_negate_avx512(a);
+            } else if #[cfg(target_feature = "avx2")] {
+                Self::batch_negate_avx2(a);
+            } else {
+                for ai in a.iter_mut() {
+                    ai.negate();
+                }
+            }
+        }
+    }
+
+    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[inline]
+    fn batch_negate_avx2<const N: usize>(a: &mut [Self; N]) {
+        let mut i = 0;
+        while i + 3 < N {
+            let fe_x4 = FieldElement2625x4::new(&a[i], &a[i + 1], &a[i + 2], &a[i + 3]);
+            let neg = fe_x4.neg();
+
+            let results = neg.split();
+            a[i] = results[0];
+            a[i + 1] = results[1];
+            a[i + 2] = results[2];
+            a[i + 3] = results[3];
+
+            i += 4;
+        }
+
+        // Handle remaining elements
+        while i < N {
+            a[i].negate();
+            i += 1;
         }
     }
 
@@ -807,6 +867,39 @@ impl FieldElement51 {
     }
 
     #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    fn batch_sub_mul_square_add_avx2<const N: usize>(values: &mut [Self; N], sub: &Self, mul: &[Self; N], add: &[Self; N]){
+        let mut i = 0;
+        let sub_neg = {
+            let mut tmp = *sub;
+            tmp.negate();
+            tmp
+        };
+        let sub_vec = FieldElement2625x4::splat(&sub_neg);
+
+        while i + 3 < N {
+            let val_vec = FieldElement2625x4::new(&values[i], &values[i + 1], &values[i + 2], &values[i + 3]);
+            let mul_vec = FieldElement2625x4::new(&mul[i], &mul[i + 1], &mul[i + 2], &mul[i + 3]);
+            let add_vec = FieldElement2625x4::new(&add[i], &add[i + 1], &add[i + 2], &add[i + 3]);
+
+            let result = (&(val_vec + sub_vec) * &mul_vec).square() + add_vec;
+
+            let results = result.split();
+            values[i] = results[0];
+            values[i + 1] = results[1];
+            values[i + 2] = results[2];
+            values[i + 3] = results[3];
+
+            i += 4;
+        }
+
+        // Handle remaining elements
+        while i < N {
+            values[i] = &(&(&values[i] - &sub) * &mul[i]).square() + &add[i];
+            i += 1;
+        }
+    }
+
+    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
     #[inline]
     fn batch_square_avx2<const N: usize>(a: &mut [Self; N]) {
         let mut i = 0;
@@ -833,8 +926,6 @@ impl FieldElement51 {
     #[cfg(target_feature = "avx512ifma")]
     #[inline]
     fn batch_subtract_avx512<const N: usize>(a: &mut [Self; N], b: &Self) {
-        use crate::backend::vector::ifma::field::{F51x4Reduced, F51x4Unreduced};
-
         let mut i = 0;
         // Process 4 elements at a time using AVX512 IFMA
         while i + 3 < N {
@@ -859,8 +950,6 @@ impl FieldElement51 {
     #[cfg(target_feature = "avx512ifma")]
     #[inline]
     fn batch_add_avx512<const N: usize>(a: &mut [Self; N], b: &Self) {
-        use crate::backend::vector::ifma::field::{F51x4Reduced, F51x4Unreduced};
-
         let mut i = 0;
         // Process 4 elements at a time using AVX512 IFMA
         while i + 3 < N {
@@ -929,6 +1018,30 @@ impl FieldElement51 {
         // Handle remaining elements
         while i < N {
             a[i] = a[i].square();
+            i += 1;
+        }
+    }
+
+    #[cfg(target_feature = "avx512ifma")]
+    #[inline]
+    fn batch_mul_and_square_avx512<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
+        let mut i = 0;
+        // Process 4 elements at a time using AVX512 IFMA
+        while i + 3 < N {
+            let a_vec: F51x4Reduced = F51x4Unreduced::new(&a[i], &a[i + 1], &a[i + 2], &a[i + 3]).into();
+            let b_vec: F51x4Reduced = F51x4Unreduced::new(&b[i], &b[i + 1], &b[i + 2], &b[i + 3]).into();
+            let result = (&a_vec * &b_vec).square();
+            let splits = result.split();
+            a[i] = splits[0];
+            a[i + 1] = splits[1];
+            a[i + 2] = splits[2];
+            a[i + 3] = splits[3];
+            i += 4;
+        }
+
+        // Handle remaining elements
+        while i < N {
+            a[i] = (&a[i] * &b[i]).square();
             i += 1;
         }
     }

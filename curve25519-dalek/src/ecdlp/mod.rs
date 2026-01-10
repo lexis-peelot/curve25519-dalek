@@ -93,8 +93,7 @@ mod table;
 
 use crate::{
     RistrettoPoint, Scalar,
-    constants::MONTGOMERY_A_NEG,
-    constants::RISTRETTO_BASEPOINT_POINT as G,
+    constants::{MONTGOMERY_A_NEG, RISTRETTO_BASEPOINT_POINT as G},
     field::FieldElement,
 };
 use core::{
@@ -488,7 +487,6 @@ fn fast_ecdlp(
     let mut alphas_origin = [FieldElement::ZERO; BATCH_SIZE];
     let mut batch_origin = [FieldElement::ZERO; BATCH_SIZE];
     let mut lambdas_origin = [FieldElement::ZERO; BATCH_SIZE];
-    let mut lambdas_neg_origin = [FieldElement::ZERO; BATCH_SIZE];
 
     for i in 0..BATCH_SIZE {
         alphas_origin[i] = t2_cache_alpha[i];
@@ -496,8 +494,11 @@ fn fast_ecdlp(
         let t2_point = &t2_cache[i];
         batch_origin[i] = t2_point.u;
         lambdas_origin[i] = t2_point.v;
-        lambdas_neg_origin[i] = -&t2_point.v;
     }
+
+    // Also prepare negated lambdas
+    let mut lambdas_neg_origin = lambdas_origin;
+    FieldElement::batch_negate(&mut lambdas_neg_origin);
 
     'outer: for (index, j_start, target_montgomery, progress) in point_iterator {
         // amortize the potential cost of the report function
@@ -529,7 +530,7 @@ fn fast_ecdlp(
         }
 
         let mut batch = batch_origin;
-        FieldElement::batch_subtract::<BATCH_SIZE>(&mut batch, &target_montgomery.u);
+        FieldElement::batch_subtract(&mut batch, &target_montgomery.u);
 
         // Z = T2[j]_x - Pm_x
         for (i, batch) in batch.iter().enumerate() {
@@ -552,15 +553,12 @@ fn fast_ecdlp(
         FieldElement::invert_batch(&mut batch);
 
         let mut alphas = alphas_origin;
-        FieldElement::batch_subtract::<BATCH_SIZE>(&mut alphas, &target_montgomery.u);
+        FieldElement::batch_subtract(&mut alphas, &target_montgomery.u);
 
         // lambda = (T2[j]_y - Pm_y) * nu
         // Q_x = lambda^2 - A - T2[j]_x - Pm_x
         let mut lambdas = lambdas_origin;
-        FieldElement::batch_subtract::<BATCH_SIZE>(&mut lambdas, &target_montgomery.v);
-        FieldElement::batch_mul(&mut lambdas, &batch);
-        FieldElement::batch_square(&mut lambdas);
-        FieldElement::batch_add_n::<BATCH_SIZE>(&mut lambdas, &alphas);
+        FieldElement::batch_sub_mul_square_add(&mut lambdas, &target_montgomery.v, &batch, &alphas);
 
         for (batch_i, qx) in lambdas.iter().enumerate() {
             let j = batch_i + 1;
@@ -584,10 +582,7 @@ fn fast_ecdlp(
         // lambda = (T2[j]_y - Pm_y) * nu
         // Q_x = lambda^2 - A - T2[j]_x - Pm_x
         let mut lambdas = lambdas_neg_origin;
-        FieldElement::batch_subtract::<BATCH_SIZE>(&mut lambdas, &target_montgomery.v);
-        FieldElement::batch_mul(&mut lambdas, &batch);
-        FieldElement::batch_square(&mut lambdas);
-        FieldElement::batch_add_n::<BATCH_SIZE>(&mut lambdas, &alphas);
+        FieldElement::batch_sub_mul_square_add(&mut lambdas, &target_montgomery.v, &batch, &alphas);
 
         for (batch_i, qx) in lambdas.iter().enumerate() {
             let j = batch_i + 1;
