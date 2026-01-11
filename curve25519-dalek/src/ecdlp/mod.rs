@@ -462,6 +462,10 @@ where
     })
 }
 
+fn is_point_equal(v: i64, target: &RistrettoPoint) -> bool {
+   i64_to_scalar(v) * G == *target
+}
+
 fn fast_ecdlp(
     precomputed_tables: &ECDLPTablesFileView<'_>,
     target_point: RistrettoPoint,
@@ -475,12 +479,12 @@ fn fast_ecdlp(
 
     let mut found = None;
     let mut consider_candidate = |m| {
-        if i64_to_scalar(m) * G == target_point {
+        let equal = is_point_equal(m, &target_point);
+        if equal {
             found = found.or(Some(m as u64));
-            true
-        } else {
-            false
         }
+
+        equal
     };
 
     // Precompute origins for batching
@@ -533,6 +537,7 @@ fn fast_ecdlp(
         FieldElement::batch_subtract(&mut batch, &target_montgomery.u);
 
         // Z = T2[j]_x - Pm_x
+        let mut has_zero = false;
         for (i, batch) in batch.iter().enumerate() {
             if batch.is_zero_not_ct() {
                 let j = i + 1;
@@ -543,14 +548,22 @@ fn fast_ecdlp(
                         || consider_candidate(
                             (j_start as i64 - j as i64) << precomputed_tables.get_l1(),
                         );
+
+                // should always be found here
                 if !pseudo_constant_time && found {
                     break 'outer;
                 }
+
+                has_zero = true;
             }
         }
 
         // nu = Z^-1
-        FieldElement::invert_batch(&mut batch);
+        if has_zero {
+            FieldElement::invert_batch(&mut batch);
+        } else {
+            FieldElement::invert_batch_checked(&mut batch);
+        }
 
         let mut alphas = alphas_origin;
         FieldElement::batch_subtract(&mut alphas, &target_montgomery.u);
@@ -681,7 +694,7 @@ mod tests {
         let view = tables.view();
 
         for i in (0..(1u64 << 48)).step_by(1 << L1).take(1 << 12) {
-            let num = i; // rand::thread_rng().gen_range(0u64..(1 << 48));
+            let num = i;
             let mut point = RistrettoPoint::mul_base(&Scalar::from(num));
 
             if rng().random() {

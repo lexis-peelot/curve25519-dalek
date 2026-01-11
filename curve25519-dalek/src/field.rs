@@ -233,6 +233,37 @@ impl FieldElement {
 
     /// Given a slice of pub(crate)lic `FieldElements`, replace each with its inverse.
     ///
+    /// No FieldElement in `inputs` may be zero.
+    pub(crate) fn invert_batch_checked<const N: usize>(inputs: &mut [FieldElement; N]) {
+        let mut scratch = [FieldElement::ONE; N];
+
+        // Keep an accumulator of all of the previous products
+        let mut acc = FieldElement::ONE;
+
+        // Pass through the input vector, recording the previous
+        // products in the scratch space
+        for (input, scratch) in inputs.iter().zip(scratch.iter_mut()) {
+            *scratch = acc;
+            acc = &acc * input;
+        }
+
+        // acc is nonzero because we skipped zeros in inputs
+        assert!(bool::from(!acc.is_zero()));
+
+        // Compute the inverse of all products
+        acc = acc.invert();
+
+        // Pass through the vector backwards to compute the inverses
+        // in place
+        for (input, scratch) in inputs.iter_mut().rev().zip(scratch.into_iter().rev()) {
+            let tmp = &acc * input;
+            *input = &acc * &scratch;
+            acc = tmp;
+        }
+    }
+
+    /// Given a slice of pub(crate)lic `FieldElements`, replace each with its inverse.
+    ///
     /// When an input `FieldElement` is zero, its value is unchanged.
     #[cfg(feature = "alloc")]
     pub(crate) fn invert_batch_alloc(inputs: &mut [FieldElement]) {

@@ -139,7 +139,8 @@ impl AffineMontgomeryPoint {
         FieldElement::batch_add(&mut v_coords, &addend.v);
 
         // Compute denominators for lambda
-        let mut denominators = [FieldElement::ZERO; N];
+        // Default to 1 to avoid division by zero in batch inversion
+        let mut denominators = [FieldElement::ONE; N];
         let mut numerators = [FieldElement::ZERO; N];
 
         for ((i, u_coord), v_coord) in u_coords.iter().enumerate().zip(v_coords.iter()) {
@@ -184,9 +185,10 @@ impl AffineMontgomeryPoint {
 
         // Batch invert denominators
         let mut inv_denominators = denominators;
-        FieldElement::invert_batch(&mut inv_denominators);
+        FieldElement::invert_batch_checked(&mut inv_denominators);
 
         // Compute lambdas using batch multiplication
+        // Because numerators are zero, it will be zeroed in the result too
         FieldElement::batch_mul(&mut numerators, &inv_denominators);
 
         let mut lambdas = numerators;
