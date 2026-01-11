@@ -25,10 +25,10 @@ use subtle::ConditionallySelectable;
 #[cfg(feature = "zeroize")]
 use zeroize::Zeroize;
 
-#[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+#[cfg(all(curve25519_dalek_backend = "simd", not(curve25519_dalek_backend = "avx512")))]
 use crate::backend::vector::avx2::field::FieldElement2625x4;
 
-#[cfg(all(target_feature = "avx512ifma"))]
+#[cfg(curve25519_dalek_backend = "avx512")]
 use crate::backend::vector::ifma::field::{F51x4Reduced, F51x4Unreduced};
 
 
@@ -585,9 +585,9 @@ impl FieldElement51 {
     #[inline]
     pub fn batch_subtract<const N: usize>(a: &mut [Self; N], b: &Self) {
         cfg_if! {
-            if #[cfg(target_feature = "avx512ifma")] {
+            if #[cfg(curve25519_dalek_backend = "avx512")] {
                 Self::batch_subtract_avx512(a, b);
-            } else if #[cfg(target_feature = "avx2")] {
+            } else if #[cfg(curve25519_dalek_backend = "simd")] {
                 Self::batch_subtract_avx2(a, b);
             } else {
                 for ai in a.iter_mut() {
@@ -601,9 +601,9 @@ impl FieldElement51 {
     #[inline]
     pub fn batch_subtract_n<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
         cfg_if! {
-            if #[cfg(target_feature = "avx512ifma")] {
+            if #[cfg(curve25519_dalek_backend = "avx512")] {
                 Self::batch_subtract_n_avx512(a, b);
-            } else if #[cfg(target_feature = "avx2")] {
+            } else if #[cfg(curve25519_dalek_backend = "simd")] {
                 Self::batch_subtract_n_avx2(a, b);
             } else {
                 for (ai, bi) in a.iter_mut().zip(b.iter()) {
@@ -617,9 +617,9 @@ impl FieldElement51 {
     #[inline]
     pub fn batch_add<const N: usize>(a: &mut [Self; N], b: &Self) {
         cfg_if! {
-            if #[cfg(target_feature = "avx512ifma")] {
+            if #[cfg(curve25519_dalek_backend = "avx512")] {
                 Self::batch_add_avx512(a, b);
-            } else if #[cfg(target_feature = "avx2")] {
+            } else if #[cfg(curve25519_dalek_backend = "simd")] {
                 Self::batch_add_avx2(a, b);
             } else {
                 for ai in a.iter_mut() {
@@ -633,9 +633,9 @@ impl FieldElement51 {
     #[inline]
     pub fn batch_add_n<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
         cfg_if! {
-            if #[cfg(target_feature = "avx512ifma")] {
+            if #[cfg(curve25519_dalek_backend = "avx512")] {
                 Self::batch_add_n_avx512(a, b);
-            } else if #[cfg(target_feature = "avx2")] {
+            } else if #[cfg(curve25519_dalek_backend = "simd")] {
                 Self::batch_add_n_avx2(a, b);
             } else {
                 for (ai, bi) in a.iter_mut().zip(b.iter()) {
@@ -649,9 +649,9 @@ impl FieldElement51 {
     #[inline]
     pub fn batch_mul<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
         cfg_if! {
-            if #[cfg(target_feature = "avx512ifma")] {
+            if #[cfg(curve25519_dalek_backend = "avx512")] {
                 Self::batch_mul_avx512(a, b);
-            } else if #[cfg(target_feature = "avx2")] {
+            } else if #[cfg(curve25519_dalek_backend = "simd")] {
                 Self::batch_mul_avx2(a, b);
             } else {
                 for (ai, bi) in a.iter_mut().zip(b.iter()) {
@@ -664,9 +664,9 @@ impl FieldElement51 {
     #[inline]
     pub fn batch_square<const N: usize>(a: &mut [Self; N]) {
         cfg_if! {
-            if #[cfg(target_feature = "avx512ifma")] {
+            if #[cfg(curve25519_dalek_backend = "avx512")] {
                 Self::batch_square_avx512(a);
-            } else if #[cfg(target_feature = "avx2")] {
+            } else if #[cfg(curve25519_dalek_backend = "simd")] {
                 Self::batch_square_avx2(a);
             } else {
                 for ai in a.iter_mut() {
@@ -680,9 +680,9 @@ impl FieldElement51 {
     #[inline]
     pub fn batch_sub_mul_square_add<const N: usize>(values: &mut [Self; N], sub: &Self, mul: &[Self; N], add: &[Self; N]) {
         cfg_if! {
-            if #[cfg(target_feature = "avx512ifma")] {
+            if #[cfg(curve25519_dalek_backend = "avx512")] {
                 Self::batch_sub_mul_square_add_avx512(values, sub, mul, add);
-            } else if #[cfg(target_feature = "avx2")] {
+            } else if #[cfg(curve25519_dalek_backend = "simd")] {
                 Self::batch_sub_mul_square_add_avx2(values, sub, mul, add);
             } else {
                 for ((ai, bi), ci) in values.iter_mut().zip(mul.iter()).zip(add.iter()) {
@@ -696,9 +696,9 @@ impl FieldElement51 {
     #[inline]
     pub fn batch_negate<const N: usize>(a: &mut [Self; N]) {
         cfg_if! {
-            if #[cfg(target_feature = "avx512ifma")] {
+            if #[cfg(curve25519_dalek_backend = "avx512")] {
                 Self::batch_negate_avx512(a);
-            } else if #[cfg(target_feature = "avx2")] {
+            } else if #[cfg(curve25519_dalek_backend = "simd")] {
                 Self::batch_negate_avx2(a);
             } else {
                 for ai in a.iter_mut() {
@@ -708,7 +708,7 @@ impl FieldElement51 {
         }
     }
 
-    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[cfg(all(curve25519_dalek_backend = "simd", not(curve25519_dalek_backend = "avx512")))]
     #[inline]
     fn batch_negate_avx2<const N: usize>(a: &mut [Self; N]) {
         let mut i = 0;
@@ -732,7 +732,7 @@ impl FieldElement51 {
         }
     }
 
-    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[cfg(all(curve25519_dalek_backend = "simd", not(curve25519_dalek_backend = "avx512")))]
     #[inline]
     fn batch_subtract_avx2<const N: usize>(a: &mut [Self; N], b: &Self) {
         let mut i = 0;
@@ -761,7 +761,7 @@ impl FieldElement51 {
         }
     }
 
-    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[cfg(all(curve25519_dalek_backend = "simd", not(curve25519_dalek_backend = "avx512")))]
     #[inline(always)]
     fn batch_subtract_n_avx2<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
         let mut i = 0;
@@ -788,7 +788,7 @@ impl FieldElement51 {
         }
     }
 
-    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[cfg(all(curve25519_dalek_backend = "simd", not(curve25519_dalek_backend = "avx512")))]
     #[inline]
     fn batch_add_avx2<const N: usize>(a: &mut [Self; N], b: &Self) {
         let mut i = 0;
@@ -814,7 +814,7 @@ impl FieldElement51 {
         }
     }
 
-    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[cfg(all(curve25519_dalek_backend = "simd", not(curve25519_dalek_backend = "avx512")))]
     #[inline(always)]
     fn batch_add_n_avx2<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
         let mut i = 0;
@@ -840,7 +840,7 @@ impl FieldElement51 {
         }
     }
 
-    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[cfg(all(curve25519_dalek_backend = "simd", not(curve25519_dalek_backend = "avx512")))]
     #[inline(always)]
     fn batch_mul_avx2<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
         let mut i = 0;
@@ -866,7 +866,7 @@ impl FieldElement51 {
         }
     }
 
-    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[cfg(all(curve25519_dalek_backend = "simd", not(curve25519_dalek_backend = "avx512")))]
     fn batch_sub_mul_square_add_avx2<const N: usize>(values: &mut [Self; N], sub: &Self, mul: &[Self; N], add: &[Self; N]){
         let mut i = 0;
         let sub_neg = {
@@ -899,7 +899,7 @@ impl FieldElement51 {
         }
     }
 
-    #[cfg(all(target_feature = "avx2", not(target_feature = "avx512ifma")))]
+    #[cfg(all(curve25519_dalek_backend = "simd", not(curve25519_dalek_backend = "avx512")))]
     #[inline]
     fn batch_square_avx2<const N: usize>(a: &mut [Self; N]) {
         let mut i = 0;
@@ -923,15 +923,15 @@ impl FieldElement51 {
         }
     }
 
-    #[cfg(target_feature = "avx512ifma")]
+    #[cfg(curve25519_dalek_backend = "avx512")]
     #[inline]
     fn batch_subtract_avx512<const N: usize>(a: &mut [Self; N], b: &Self) {
         let mut i = 0;
         // Process 4 elements at a time using AVX512 IFMA
         while i + 3 < N {
             let a_vec = F51x4Unreduced::new(&a[i], &a[i + 1], &a[i + 2], &a[i + 3]);
-            let b_vec = F51x4Unreduced::new(b, b, b, b);
-            let result: F51x4Reduced = a_vec.diff(&b_vec).into();
+            let b_vec = F51x4Unreduced::new(b, b, b, b).negate();
+            let result: F51x4Reduced = a_vec.add(&b_vec).into();
             let splits = F51x4Unreduced::from(result).split();
             a[i] = splits[0];
             a[i + 1] = splits[1];
@@ -947,7 +947,7 @@ impl FieldElement51 {
         }
     }
 
-    #[cfg(target_feature = "avx512ifma")]
+    #[cfg(curve25519_dalek_backend = "avx512")]
     #[inline]
     fn batch_add_avx512<const N: usize>(a: &mut [Self; N], b: &Self) {
         let mut i = 0;
@@ -971,7 +971,7 @@ impl FieldElement51 {
         }
     }
 
-    #[cfg(target_feature = "avx512ifma")]
+    #[cfg(curve25519_dalek_backend = "avx512")]
     #[inline]
     fn batch_mul_avx512<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
         use crate::backend::vector::ifma::field::{F51x4Reduced, F51x4Unreduced};
@@ -997,7 +997,7 @@ impl FieldElement51 {
         }
     }
 
-    #[cfg(target_feature = "avx512ifma")]
+    #[cfg(curve25519_dalek_backend = "avx512")]
     #[inline]
     fn batch_square_avx512<const N: usize>(a: &mut [Self; N]) {
         use crate::backend::vector::ifma::field::{F51x4Reduced, F51x4Unreduced};
@@ -1022,7 +1022,7 @@ impl FieldElement51 {
         }
     }
 
-    #[cfg(target_feature = "avx512ifma")]
+    #[cfg(curve25519_dalek_backend = "avx512")]
     #[inline]
     fn batch_mul_and_square_avx512<const N: usize>(a: &mut [Self; N], b: &[Self; N]) {
         let mut i = 0;
